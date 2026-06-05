@@ -53,6 +53,15 @@ const CHAR_FULL_NAMES: Record<string, string> = {
 
 export default function ChargenWizard({ onComplete, onCancel }: Props) {
   const [step, setStep] = useState(0);
+
+  // Characteristics Rolling State
+  const [showRollModal, setShowRollModal] = useState(false);
+  const [rollStep, setRollStep] = useState<'roll' | 'choose' | 'swap'>('roll');
+  const [statBlocks, setStatBlocks] = useState<Record<string, number>[]>([]);
+  const [chosenBlockIndex, setChosenBlockIndex] = useState<number | null>(null);
+  const [swapAssignments, setSwapAssignments] = useState<Record<string, number>>({});
+  const [swapSource, setSwapSource] = useState<string | null>(null);
+  const [keptRolledStats, setKeptRolledStats] = useState(false);
   const [loading, setLoading] = useState(true);
   const [homeworlds, setHomeworlds] = useState<any[]>([]);
   const [backgrounds, setBackgrounds] = useState<any[]>([]);
@@ -170,12 +179,18 @@ export default function ChargenWizard({ onComplete, onCancel }: Props) {
 
   // Auto-select the homeworld's alternate advance when hwAltChosen is toggled on
   useEffect(() => {
-    if (hwAltChosen && hwAlt) {
-      if (!selectedEliteAdvances.includes(hwAlt.advanceName)) {
-        setSelectedEliteAdvances(prev => [...prev, hwAlt.advanceName]);
+    if (hwAltChosen && selHomeworld?.eliteAdvanceAlternative) {
+      if (!selectedEliteAdvances.includes(selHomeworld.eliteAdvanceAlternative.advanceName)) {
+        setSelectedEliteAdvances(prev => [...prev, selHomeworld.eliteAdvanceAlternative.advanceName]);
       }
     }
-  }, [hwAltChosen]);
+  }, [hwAltChosen, selHomeworld]);
+
+  // Reset characteristic rolls if homeworld changes
+  useEffect(() => {
+    setStatBlocks([]);
+    setChosenBlockIndex(null);
+  }, [selHomeworld]);
 
   // Reset hwAltChosen and talent/skill choices when homeworld changes
   useEffect(() => {
@@ -400,7 +415,7 @@ export default function ChargenWizard({ onComplete, onCancel }: Props) {
       }
     }
 
-    let finalTotalXp = 0;
+    let finalTotalXp = 1000 + (keptRolledStats ? 400 : 0);
     if (!aptitudes.includes('Agility')) aptitudes.push('Agility');
     else if (!aptitudes.includes('Finesse')) aptitudes.push('Finesse');
     else finalTotalXp += 400;
@@ -471,7 +486,7 @@ export default function ChargenWizard({ onComplete, onCancel }: Props) {
     // Apply Elite Advance effects
     const charTraits: { name: string; description: string }[] = [];
     let finalPsyRating: number | null = null;
-    let finalInfluence = 0;
+    let finalInfluence = finalStats.INF || 0;
 
     for (const eaName of selectedEliteAdvances) {
       const ea = eliteAdvancesData.find((e: any) => e.name === eaName);
@@ -905,7 +920,7 @@ export default function ChargenWizard({ onComplete, onCancel }: Props) {
     for (let j = 0; j < roleAptsRaw.length; j++) {
       const slot = roleAptsRaw[j].replace(/,\s*$/, '').trim();
       if (!slot) continue;
-      const options = slot.split(' or ').map(s => s.trim());
+      const options = slot.split(' or ').map((s: string) => s.trim());
       
       let chosen = options[0];
       if (options.length > 1) {
@@ -957,6 +972,114 @@ export default function ChargenWizard({ onComplete, onCancel }: Props) {
   const step7Valid = isOgryn 
     ? !!kitMeleeChoice 
     : (!!kitRangedChoice && !!kitMeleeChoice && !!kitGrenadeChoice);
+
+
+  const rollCharacteristics = () => {
+    if (statBlocks.length > 0) {
+      setShowRollModal(true);
+      return;
+    }
+
+    const plusStats = [selHomeworld?.charPlus1, selHomeworld?.charPlus2].filter(Boolean);
+    const minusStats = [selHomeworld?.charMinus].filter(Boolean);
+
+    // Map the full names back to abbreviations for internal use
+    const getAbbrev = (fullName: string | undefined) => {
+      const match = Object.entries(CHAR_FULL).find(([_, v]) => v === fullName);
+      return match ? match[0] : null;
+    };
+    const plusAbbrevs = plusStats.map(getAbbrev).filter(Boolean);
+    const minusAbbrevs = minusStats.map(getAbbrev).filter(Boolean);
+
+    const rollDice = (count: number, keep: number, keepHigh: boolean) => {
+      const rolls = Array.from({ length: count }, () => Math.floor(Math.random() * 10) + 1);
+      rolls.sort((a, b) => a - b);
+      let kept = [];
+      if (keepHigh) kept = rolls.slice(-keep);
+      else kept = rolls.slice(0, keep);
+      return kept.reduce((a, b) => a + b, 0);
+    };
+
+    const generateBlock = () => {
+      const block: Record<string, number> = {};
+      CHAR_ABBREVS.forEach(abbrev => {
+        if (plusAbbrevs.includes(abbrev)) block[abbrev] = rollDice(3, 2, true);
+        else if (minusAbbrevs.includes(abbrev)) block[abbrev] = rollDice(3, 2, false);
+        else block[abbrev] = rollDice(2, 2, true);
+      });
+      return block;
+    };
+
+    setStatBlocks([generateBlock(), generateBlock()]);
+    setChosenBlockIndex(null);
+    setRollStep('choose');
+    setShowRollModal(true);
+  };
+
+  const handleKeepRolls = () => {
+    setKeptRolledStats(true);
+    const block = statBlocks[chosenBlockIndex!];
+    const newStats = { ...charStats };
+    CHAR_ABBREVS.forEach(a => {
+      newStats[a] = a === 'INF' ? block[a] : block[a] + 20;
+    });
+    setCharStats(newStats as any);
+    setShowRollModal(false);
+  };
+
+  const handleStartSwap = () => {
+    setKeptRolledStats(false);
+    setSwapAssignments({ ...statBlocks[chosenBlockIndex!] });
+    setSwapSource(null);
+    setRollStep('swap');
+  };
+
+  const handleSwapClick = (abbrev: string) => {
+    const plusStats = [selHomeworld?.charPlus1, selHomeworld?.charPlus2].filter(Boolean);
+    const minusStats = [selHomeworld?.charMinus].filter(Boolean);
+    
+    const getAbbrev = (fullName: string | undefined) => {
+      const match = Object.entries(CHAR_FULL).find(([_, v]) => v === fullName);
+      return match ? match[0] : null;
+    };
+    const plusAbbrevs = plusStats.map(getAbbrev).filter(Boolean) as string[];
+    const minusAbbrevs = minusStats.map(getAbbrev).filter(Boolean) as string[];
+
+    if (minusAbbrevs.includes(abbrev)) return; // Cannot swap minus stat
+
+    if (!swapSource) {
+      setSwapSource(abbrev);
+    } else {
+      if (swapSource === abbrev) {
+        setSwapSource(null);
+        return;
+      }
+      
+      const isSourcePlus = plusAbbrevs.includes(swapSource);
+      const isTargetPlus = plusAbbrevs.includes(abbrev);
+      
+      if ((isSourcePlus && !isTargetPlus) || (!isSourcePlus && isTargetPlus)) {
+        setSwapSource(null);
+        return;
+      }
+      
+      const newAssignments = { ...swapAssignments };
+      const temp = newAssignments[swapSource];
+      newAssignments[swapSource] = newAssignments[abbrev];
+      newAssignments[abbrev] = temp;
+      setSwapAssignments(newAssignments);
+      setSwapSource(null);
+    }
+  };
+
+  const handleConfirmSwap = () => {
+    const newStats = { ...charStats };
+    CHAR_ABBREVS.forEach(a => {
+      newStats[a] = a === 'INF' ? swapAssignments[a] : swapAssignments[a] + 20;
+    });
+    setCharStats(newStats as any);
+    setShowRollModal(false);
+  };
 
   if (loading) return <div className="page" style={{ textAlign: 'center', padding: '60px 20px' }}><div className="skeleton skeleton--title" /></div>;
 
@@ -2010,6 +2133,11 @@ export default function ChargenWizard({ onComplete, onCancel }: Props) {
           <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: 'var(--space-sm)' }}>
             Enter your final characteristic values (after homeworld bonuses). G-1289 stats will be applied automatically.
           </p>
+          
+          <button className="btn btn--secondary" style={{ marginBottom: "var(--space-md)", width: "100%" }} onClick={rollCharacteristics}>
+            🎲 Roll Characteristics
+          </button>
+
           {psykerWithoutMystic && !wpMeetsRequirement && (
             <div style={{
               fontSize: '0.8rem', padding: 'var(--space-sm)', marginBottom: 'var(--space-sm)',
@@ -2019,6 +2147,7 @@ export default function ChargenWizard({ onComplete, onCancel }: Props) {
               ⚠ <strong>Psyker Requirement:</strong> Willpower must be at least 40 (currently {charStats['WP'] || 0})
             </div>
           )}
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 'var(--space-sm)', marginBottom: 'var(--space-lg)' }}>
             {CHAR_ABBREVS.map(abbrev => (
               <label key={abbrev} className="stat-edit-form__label" style={{ textAlign: 'center' }}>
@@ -2340,6 +2469,100 @@ export default function ChargenWizard({ onComplete, onCancel }: Props) {
           </button>
         )}
       </div>
+
+      {showRollModal && (
+        <div className="modal-overlay">
+          <div className="modal-sheet" style={{ width: 800, maxWidth: '90vw' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-md)' }}>
+              <h2>Roll Characteristics</h2>
+              <button className="btn" onClick={() => setShowRollModal(false)}>Cancel</button>
+            </div>
+
+            {rollStep === 'choose' && (
+              <div>
+                <p style={{ marginBottom: 'var(--space-md)', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+                  Two stat-blocks have been generated. Select the one you prefer.
+                </p>
+                <div style={{ display: 'flex', gap: 'var(--space-md)' }}>
+                  {statBlocks.map((block, i) => (
+                    <div key={i} style={{ flex: 1, padding: 'var(--space-sm)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', background: 'var(--bg-card)', cursor: 'pointer', outline: chosenBlockIndex === i ? '2px solid var(--theme-color)' : 'none' }} onClick={() => setChosenBlockIndex(i)}>
+                      <h3 style={{ textAlign: 'center', marginBottom: 'var(--space-sm)' }}>Stat Block {i + 1}</h3>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 8px' }}>
+                        {CHAR_ABBREVS.map(a => {
+                          const fullName = CHAR_FULL[a];
+                          const isMinus = selHomeworld?.charMinus === fullName;
+                          const isPlus = selHomeworld?.charPlus1 === fullName || selHomeworld?.charPlus2 === fullName;
+                          return (
+                            <div key={a} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', padding: '2px 4px', borderRadius: '4px', background: isPlus ? 'rgba(34, 197, 94, 0.1)' : isMinus ? 'rgba(239, 68, 68, 0.1)' : 'transparent' }}>
+                              <span style={{ color: isPlus ? 'var(--color-success, #22c55e)' : isMinus ? 'var(--color-danger, #ef4444)' : 'inherit', fontWeight: isPlus || isMinus ? 600 : 'normal' }}>
+                                {a} {isPlus ? '(+)' : isMinus ? '(-)' : ''}
+                              </span>
+                              <strong>{a === 'INF' ? block[a] : block[a] + 20} <span style={{ opacity: 0.5 }}>({block[a]})</span></strong>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                
+                {chosenBlockIndex !== null && (
+                  <div style={{ marginTop: 'var(--space-lg)', padding: 'var(--space-md)', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-md)' }}>
+                    <p style={{ marginBottom: 'var(--space-md)', fontSize: '0.9rem', textAlign: 'center' }}>
+                      Do you wish to keep these Characteristics as rolled (+400 XP), or re-assign them freely (0 XP)?
+                    </p>
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: 'var(--space-md)' }}>
+                      <button className="btn btn--primary" onClick={handleKeepRolls}>Keep As Rolled (+400 XP)</button>
+                      <button className="btn btn--secondary" onClick={handleStartSwap}>Re-Assign (0 XP)</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {rollStep === 'swap' && (
+              <div>
+                <p style={{ marginBottom: 'var(--space-md)', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+                  Click two characteristics to swap their dice rolls. The (-) stat cannot be swapped. The two (+) stats can only swap with each other.
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '8px', marginBottom: 'var(--space-lg)' }}>
+                  {CHAR_ABBREVS.map(a => {
+                    const fullName = CHAR_FULL[a];
+                    const isMinus = selHomeworld?.charMinus === fullName;
+                    const isPlus = selHomeworld?.charPlus1 === fullName || selHomeworld?.charPlus2 === fullName;
+                    const isSelected = swapSource === a;
+                    
+                    return (
+                      <div key={a} 
+                        style={{ 
+                          padding: '8px', 
+                          border: `1px solid ${isSelected ? 'var(--theme-color)' : isPlus ? 'rgba(34, 197, 94, 0.5)' : isMinus ? 'rgba(239, 68, 68, 0.5)' : 'var(--border-color)'}`, 
+                          borderRadius: '4px', 
+                          background: isMinus ? 'rgba(239, 68, 68, 0.1)' : isSelected ? 'rgba(139, 92, 246, 0.3)' : isPlus ? 'rgba(34, 197, 94, 0.15)' : 'var(--bg-card)',
+                          cursor: isMinus ? 'not-allowed' : 'pointer',
+                          opacity: isMinus ? 0.7 : 1,
+                          textAlign: 'center',
+                          boxShadow: isPlus && !isSelected ? '0 0 8px rgba(34, 197, 94, 0.2)' : 'none'
+                        }}
+                        onClick={() => handleSwapClick(a)}
+                      >
+                        <div style={{ fontSize: '0.75rem', color: isPlus ? 'var(--color-success, #22c55e)' : isMinus ? 'var(--color-danger, #ef4444)' : 'var(--text-muted)', fontWeight: isPlus || isMinus ? 600 : 'normal' }}>{a} {isPlus ? '(+)' : isMinus ? '(-)' : ''}</div>
+                        <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{a === 'INF' ? swapAssignments[a] : swapAssignments[a] + 20}</div>
+                        <div style={{ fontSize: '0.7rem', opacity: 0.7 }}>Roll: {swapAssignments[a]}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <button className="btn btn--primary" onClick={handleConfirmSwap}>Confirm Stats</button>
+                </div>
+              </div>
+            )}
+
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

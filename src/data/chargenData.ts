@@ -207,10 +207,10 @@ export const ALL_APTITUDES = [
   'Agility', 'Intelligence', 'Perception', 'Willpower', 'Fellowship'
 ];
 
-export const CHAR_ABBREVS = ['WS', 'BS', 'S', 'T', 'AG', 'INT', 'PER', 'WP', 'FEL'] as const;
+export const CHAR_ABBREVS = ['WS', 'BS', 'S', 'T', 'AG', 'INT', 'PER', 'WP', 'FEL', 'INF'] as const;
 export const CHAR_FULL: Record<string, string> = {
   WS: 'Weapon Skill', BS: 'Ballistic Skill', S: 'Strength', T: 'Toughness',
-  AG: 'Agility', INT: 'Intelligence', PER: 'Perception', WP: 'Willpower', FEL: 'Fellowship'
+  AG: 'Agility', INT: 'Intelligence', PER: 'Perception', WP: 'Willpower', FEL: 'Fellowship', INF: 'Influence'
 };
 
 /**
