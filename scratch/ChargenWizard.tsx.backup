@@ -1,0 +1,2001 @@
+import { useState, useEffect } from 'react';
+import { parseChoiceString, resolveAptitudeDuplicate, hasPickOne, ALL_APTITUDES, PRIMARY_CHARACTERISTICS, CHAR_ABBREVS, CHAR_FULL } from '../data/chargenData';
+import { CHARACTERISTIC_APTITUDES } from '../data/advancementData';
+
+interface Props {
+  onComplete: (data: any) => void;
+  onCancel: () => void;
+}
+
+// Skill name → characteristic abbreviation mapping
+const SKILL_CHAR_MAP: Record<string, [string, string]> = {
+  'Acrobatics': ['AG', 'General'], 'Athletics': ['S', 'General'], 'Awareness': ['PER', 'General'],
+  'Charm': ['FEL', 'General'], 'Command': ['FEL', 'General'], 'Commerce': ['INT', 'General'],
+  'Deceive': ['FEL', 'General'], 'Dodge': ['AG', 'General'], 'Inquiry': ['FEL', 'General'],
+  'Interrogation': ['WP', 'General'], 'Intimidate': ['S', 'General'], 'Logic': ['INT', 'General'],
+  'Medicae': ['INT', 'General'], 'Navigate': ['INT', 'General'], 'Operate': ['AG', 'General'],
+  'Parry': ['WS', 'General'], 'Psyniscience': ['PER', 'General'], 'Scrutiny': ['PER', 'General'],
+  'Security': ['INT', 'General'], 'Sleight of Hand': ['AG', 'General'], 'Stealth': ['AG', 'General'],
+  'Survival': ['PER', 'General'], 'Tech-Use': ['INT', 'General'],
+};
+
+function resolveSkill(name: string): { name: string; characteristic: string; category: string } {
+  const trimmed = name.trim();
+  // Direct match
+  if (SKILL_CHAR_MAP[trimmed]) return { name: trimmed, characteristic: SKILL_CHAR_MAP[trimmed][0], category: SKILL_CHAR_MAP[trimmed][1] };
+  // Specialist skills
+  for (const [base, [char]] of Object.entries(SKILL_CHAR_MAP)) {
+    if (trimmed.startsWith(base)) return { name: trimmed, characteristic: char, category: base.includes('Lore') ? base : 'General' };
+  }
+  // Lore skills
+  if (trimmed.startsWith('Common Lore')) return { name: trimmed, characteristic: 'INT', category: 'Common Lore' };
+  if (trimmed.startsWith('Scholastic Lore')) return { name: trimmed, characteristic: 'INT', category: 'Scholastic Lore' };
+  if (trimmed.startsWith('Forbidden Lore')) return { name: trimmed, characteristic: 'INT', category: 'Forbidden Lore' };
+  if (trimmed.startsWith('Linguistics')) return { name: trimmed, characteristic: 'INT', category: 'Language' };
+  if (trimmed.startsWith('Navigate')) return { name: trimmed, characteristic: 'INT', category: 'General' };
+  if (trimmed.startsWith('Operate')) return { name: trimmed, characteristic: 'AG', category: 'General' };
+  if (trimmed.startsWith('Trade')) return { name: trimmed, characteristic: 'INT', category: 'Trade' };
+  if (trimmed.startsWith('Trade')) return { name: trimmed, characteristic: 'INT', category: 'Trade' };
+  return { name: trimmed, characteristic: 'INT', category: 'General' };
+}
+
+const BASE_SKILLS = Object.keys(SKILL_CHAR_MAP).map(name => ({
+  name,
+  characteristic: SKILL_CHAR_MAP[name][0],
+  category: SKILL_CHAR_MAP[name][1]
+}));
+
+const CHAR_FULL_NAMES: Record<string, string> = {
+  WS: 'Weapon Skill', BS: 'Ballistic Skill', S: 'Strength', T: 'Toughness',
+  AG: 'Agility', INT: 'Intelligence', PER: 'Perception', WP: 'Willpower', FEL: 'Fellowship'
+};
+
+export default function ChargenWizard({ onComplete, onCancel }: Props) {
+  const [step, setStep] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [homeworlds, setHomeworlds] = useState<any[]>([]);
+  const [backgrounds, setBackgrounds] = useState<any[]>([]);
+  const [roles, setRoles] = useState<any[]>([]);
+  const [eliteAdvancesData, setEliteAdvancesData] = useState<any[]>([]);
+  const [traitsData, setTraitsData] = useState<any[]>([]);
+  const [divinationsData, setDivinationsData] = useState<any[]>([]);
+  const [weaponFamilies, setWeaponFamilies] = useState<string[]>([]);
+  const [talentsData, setTalentsData] = useState<any[]>([]);
+
+  // Wizard state
+  const [charName, setCharName] = useState('');
+  const [selHomeworld, setSelHomeworld] = useState<any>(null);
+  const [hwAptChoice, setHwAptChoice] = useState<string>('');
+  const [hwSkillChoices, setHwSkillChoices] = useState<Record<number, string>>({});
+  const [hwTalentChoices, setHwTalentChoices] = useState<Record<number, string>>({});
+  const [hwMixedChoices, setHwMixedChoices] = useState<Record<number, string>>({});
+  const [hwPickOneInputs, setHwPickOneInputs] = useState<Record<string, string>>({});
+  const [selBackground, setSelBackground] = useState<any>(null);
+  const [bgAptChoice, setBgAptChoice] = useState<string>('');
+  const [bgSkillChoices, setBgSkillChoices] = useState<Record<number, string>>({});
+  const [bgTalentChoices, setBgTalentChoices] = useState<Record<number, string>>({});
+  const [bgPickOneInputs, setBgPickOneInputs] = useState<Record<string, string>>({});
+  const [selRole, setSelRole] = useState<any>(null);
+  const [roleTalentChoice, setRoleTalentChoice] = useState('');
+  const [roleAptChoices, setRoleAptChoices] = useState<Record<number, string>>({});
+  const [roleAptManual, setRoleAptManual] = useState<Record<number, string>>({});
+  const [charStats, setCharStats] = useState<Record<string, number>>({});
+
+  const [gender, setGender] = useState<string>('');
+  const [genderChoice1, setGenderChoice1] = useState<string>('');
+  const [genderChoice2, setGenderChoice2] = useState<string>('');
+
+  const [rolledFate, setRolledFate] = useState<number | null>(null);
+  const [rolledWounds, setRolledWounds] = useState<number | null>(null);
+  const [woundsManual, setWoundsManual] = useState<string>('');
+  const [fateManual, setFateManual] = useState<string>('');
+  const [rolledInsanity, setRolledInsanity] = useState<number | null>(null);
+  const [insanityManual, setInsanityManual] = useState<string>('');
+  
+  // Rogue Psyker state
+  const [rolledRogueCorruption, setRolledRogueCorruption] = useState<number | null>(null);
+  const [rogueCorruptionManual, setRogueCorruptionManual] = useState<string>('');
+
+  // Elite Advance state
+  const [selectedEliteAdvances, setSelectedEliteAdvances] = useState<string[]>([]);
+  const [eaSkillChoices, setEaSkillChoices] = useState<Record<string, Record<number, string>>>({});
+  const [eaTalentChoices, setEaTalentChoices] = useState<Record<string, Record<number, string>>>({});
+  const [hwAltChosen, setHwAltChosen] = useState(false); // User explicitly chose the homeworld's alternate path
+
+  // Divination state
+  const [divinationRolled, setDivinationRolled] = useState<any>(null);
+  const [divinationOverrideStats, setDivinationOverrideStats] = useState<Record<string, number>>({});
+  const [divinationOverrideWounds, setDivinationOverrideWounds] = useState<number>(0);
+  const [divinationOverrideFate, setDivinationOverrideFate] = useState<number>(0);
+  const [divinationOverrideInsanity, setDivinationOverrideInsanity] = useState<number>(0);
+  const [divinationOverrideCorruption, setDivinationOverrideCorruption] = useState<number>(0);
+  const [divinationOverrideSkills, setDivinationOverrideSkills] = useState<string>('');
+  const [divinationOverrideTalents, setDivinationOverrideTalents] = useState<string>('');
+
+  // Gene-Enhanced background state
+  const [geUnnatural1, setGeUnnatural1] = useState('');
+  const [geUnnatural2, setGeUnnatural2] = useState('');
+  const [gePenaltyChar, setGePenaltyChar] = useState('');
+  const [geSkillChoices, setGeSkillChoices] = useState<Record<number, string>>({});
+  const [geTalentChoices, setGeTalentChoices] = useState<Record<number, string>>({});
+  const isGeneEnhanced = selBackground?.name === 'Gene-Enhanced';
+
+  useEffect(() => {
+    Promise.all([
+      fetch('/api/chargen/data', { credentials: 'include' }).then(r => r.json()),
+      fetch('/api/weapons/templates', { credentials: 'include' }).then(r => r.json()),
+      fetch('/api/talents/templates', { credentials: 'include' }).then(r => r.json())
+    ])
+      .then(([chargenData, weaponsData, talentsRes]) => {
+        setHomeworlds(chargenData.homeworlds || []);
+        setBackgrounds(chargenData.backgrounds || []);
+        setRoles(chargenData.roles || []);
+        setEliteAdvancesData(chargenData.eliteAdvances || []);
+        setTraitsData(chargenData.traits || []);
+        setDivinationsData(chargenData.divinations || []);
+        setTalentsData(Array.isArray(talentsRes) ? talentsRes : []);
+        
+        const families = new Set<string>();
+        if (Array.isArray(weaponsData)) {
+          weaponsData.forEach((w: any) => { if (w.family) families.add(w.family); });
+        }
+        setWeaponFamilies(Array.from(families).sort());
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  // Auto-select Psyker elite advance for Mystic role
+  useEffect(() => {
+    if (selRole?.name === 'Mystic') {
+      if (!selectedEliteAdvances.includes('Psyker')) {
+        setSelectedEliteAdvances(prev => [...prev, 'Psyker']);
+      }
+    }
+  }, [selRole]);
+
+  // Auto-select the homeworld's alternate advance when hwAltChosen is toggled on
+  useEffect(() => {
+    if (hwAltChosen && hwAlt) {
+      if (!selectedEliteAdvances.includes(hwAlt.advanceName)) {
+        setSelectedEliteAdvances(prev => [...prev, hwAlt.advanceName]);
+      }
+    }
+  }, [hwAltChosen]);
+
+  // Reset hwAltChosen and talent/skill choices when homeworld changes
+  useEffect(() => {
+    setHwAltChosen(false);
+    setHwSkillChoices({});
+    setHwTalentChoices({});
+    setHwMixedChoices({});
+  }, [selHomeworld]);
+
+  // Computed aptitudes up to current step
+  const getAptitudes = () => {
+    const apts: string[] = ['General'];
+    if (selHomeworld && hwAptChoice) {
+      const resolved = resolveAptitudeDuplicate(hwAptChoice, apts);
+      if (resolved) apts.push(resolved);
+    }
+    if (selBackground && bgAptChoice) {
+      const resolved = resolveAptitudeDuplicate(bgAptChoice, apts);
+      if (resolved) apts.push(resolved);
+    }
+    if (selRole) {
+      const roleAptsRaw = selRole.aptitudes || [];
+      for (let i = 0; i < roleAptsRaw.length; i++) {
+        const slot = roleAptsRaw[i].replace(/,\s*$/, '').trim();
+        if (!slot) continue;
+        const options = slot.split(' or ').map((s: string) => s.trim());
+        let chosen = options.length > 1 ? roleAptChoices[i] : options[0];
+        if (chosen) {
+          const resolved = resolveAptitudeDuplicate(chosen, apts);
+          if (resolved) apts.push(resolved);
+          else if (roleAptManual[i]) apts.push(roleAptManual[i]);
+        }
+      }
+    }
+    return apts;
+  };
+
+  const getTalentDescription = (talentStr: string): string => {
+    const baseName = talentStr.split('(')[0].trim();
+    const talent = talentsData.find(t => t.name.toLowerCase() === baseName.toLowerCase());
+    return talent ? talent.description : '';
+  };
+
+  // Helper to replace "Pick One" in a name with the user's typed value
+  const applyPickOne = (name: string, key: string): string => {
+    if (!hasPickOne(name)) return name;
+    const userVal = key.startsWith('hw-') ? hwPickOneInputs[key]?.trim() : bgPickOneInputs[key]?.trim();
+    if (userVal) return name.replace(/Pick One/i, userVal);
+    return name; // Leave as-is if not filled
+  };
+
+  const handleFinish = () => {
+    const aptitudes = getAptitudes();
+    // Collect skills — use expanded list
+    const skillSet = new Map<string, { name: string; characteristic: string; category: string; plus_10?: boolean }>();
+    if (isGeneEnhanced) {
+      // For Gene-Enhanced, add the 4 chosen skills at Rank 2 (Trained, +10)
+      for (const skillName of Object.values(geSkillChoices)) {
+        if (skillName) {
+          const resolved = resolveSkill(skillName);
+          skillSet.set(resolved.name, { ...resolved, plus_10: true });
+        }
+      }
+    } else if (selBackground) {
+      for (let idx = 0; idx < expandedBgSkills.length; idx++) {
+        const s = applyPickOne(expandedBgSkills[idx], `skill-auto-${idx}`);
+        const resolved = resolveSkill(s);
+        skillSet.set(resolved.name, resolved);
+      }
+      const parsed = parseChoiceString(selBackground.skills);
+      for (let i = 0; i < parsed.choices.length; i++) {
+        let chosen = bgSkillChoices[i];
+        if (chosen) {
+          chosen = applyPickOne(chosen, `skill-choice-${i}`);
+          const resolved = resolveSkill(chosen);
+          skillSet.set(resolved.name, resolved);
+        }
+      }
+    }
+
+    // Collect talents — use expanded list
+    const talentList: { name: string; specialisation: string | null; tier: number }[] = [];
+    if (isGeneEnhanced) {
+      for (const talentName of Object.values(geTalentChoices)) {
+        if (talentName) talentList.push({ name: talentName, specialisation: null, tier: 1 }); // We don't save tier strictly here, the character model resolves it
+      }
+    } else if (selBackground) {
+      for (let idx = 0; idx < expandedBgTalents.length; idx++) {
+        const t = applyPickOne(expandedBgTalents[idx], `talent-auto-${idx}`);
+        talentList.push({ name: t, specialisation: null, tier: 1 });
+      }
+      for (let i = 0; i < expandedBgTalentChoices.length; i++) {
+        let chosen = bgTalentChoices[i];
+        if (chosen) {
+          chosen = applyPickOne(chosen, `talent-choice-${i}`);
+          talentList.push({ name: chosen, specialisation: null, tier: 1 });
+        }
+      }
+    }
+    if (roleTalentChoice) talentList.push({ name: roleTalentChoice, specialisation: null, tier: 1 });
+
+    if (selHomeworld) {
+      for (let idx = 0; idx < expandedHwSkills.length; idx++) {
+        const s = applyPickOne(expandedHwSkills[idx], `hw-skill-auto-${idx}`);
+        const resolved = resolveSkill(s);
+        skillSet.set(resolved.name, resolved);
+      }
+      for (let i = 0; i < expandedHwSkillChoices.length; i++) {
+        let chosen = hwSkillChoices[i];
+        if (chosen) {
+          chosen = applyPickOne(chosen, `hw-skill-choice-${i}`);
+          const resolved = resolveSkill(chosen);
+          skillSet.set(resolved.name, resolved);
+        }
+      }
+      for (let idx = 0; idx < expandedHwTalents.length; idx++) {
+        const t = applyPickOne(expandedHwTalents[idx], `hw-talent-auto-${idx}`);
+        talentList.push({ name: t, specialisation: null, tier: 1 });
+      }
+      for (let i = 0; i < expandedHwTalentChoices.length; i++) {
+        let chosen = hwTalentChoices[i];
+        if (chosen) {
+          chosen = applyPickOne(chosen, `hw-talent-choice-${i}`);
+          talentList.push({ name: chosen, specialisation: null, tier: 1 });
+        }
+      }
+      for (let i = 0; i < expandedHwMixedChoices.length; i++) {
+        let chosen = hwMixedChoices[i];
+        if (chosen) {
+          if (chosen.startsWith('Skill: ')) {
+            const clean = chosen.substring(7).trim();
+            const resolved = resolveSkill(clean);
+            skillSet.set(resolved.name, resolved);
+          } else if (chosen.startsWith('Talent: ')) {
+            const clean = chosen.substring(8).trim();
+            talentList.push({ name: clean, specialisation: null, tier: 1 });
+          }
+        }
+      }
+    }
+
+    const finalFate = (fateManual ? parseInt(fateManual) : (rolledFate ?? (parseInt(selHomeworld?.fate) || 0))) + divinationOverrideFate;
+    const finalWounds = (woundsManual ? parseInt(woundsManual) : (rolledWounds ?? 10)) + divinationOverrideWounds;
+    const finalInsanity = (insanityManual ? parseInt(insanityManual) : (rolledInsanity ?? 0)) + divinationOverrideInsanity;
+    
+    // Calculate Corruption
+    let baseCorruption = 0;
+    if (selectedEliteAdvances.includes('Psyker') && !selBackground?.name?.includes('Telepathica')) {
+      baseCorruption = rogueCorruptionManual ? parseInt(rogueCorruptionManual) : (rolledRogueCorruption ?? 0);
+    }
+    const finalCorruption = baseCorruption + divinationOverrideCorruption;
+    
+    // Gender skills
+    if (gender === 'Male') {
+      skillSet.set('Athletics', resolveSkill('Athletics'));
+      if (genderChoice1) skillSet.set(genderChoice1, resolveSkill(genderChoice1));
+    } else if (gender === 'Female') {
+      if (genderChoice1) skillSet.set(genderChoice1, resolveSkill(genderChoice1));
+      if (genderChoice2) skillSet.set(genderChoice2, resolveSkill(genderChoice2));
+    }
+
+    // Standard Skills for all characters
+    skillSet.set('Linguistics (Low Gothic)', resolveSkill('Linguistics (Low Gothic)'));
+
+    // G-1289 Indoctrination Training
+    const g1289Skills = ['Navigate (Surface)', 'Common Lore (War)', 'Awareness', 'Stealth', 'Survival'];
+    for (const s of g1289Skills) skillSet.set(s, resolveSkill(s));
+
+    const g1289Talents = ['Foresight', 'Weapon Training (Solid Projectile)', 'Weapon Training (Low-Tech)', 'Takedown', 'Enemy (Inquisition)'];
+    for (const t of g1289Talents) {
+      if (!talentList.find(x => x.name.toLowerCase() === t.toLowerCase())) {
+        talentList.push({ name: t, specialisation: null, tier: 1 });
+      }
+    }
+
+    let finalTotalXp = 0;
+    if (!aptitudes.includes('Agility')) aptitudes.push('Agility');
+    else if (!aptitudes.includes('Finesse')) aptitudes.push('Finesse');
+    else finalTotalXp += 400;
+    
+    const finalStats = { ...charStats };
+    finalStats.WS = (finalStats.WS || 0) + 3;
+    finalStats.BS = (finalStats.BS || 0) + 3;
+    finalStats.PER = (finalStats.PER || 0) + 3;
+    finalStats.FEL = (finalStats.FEL || 0) - 3;
+    
+    // Apply Gene-Enhanced stat modifiers
+    if (isGeneEnhanced) {
+      if (geUnnatural1 === geUnnatural2) {
+        // Doubled
+        finalStats[geUnnatural1] = (finalStats[geUnnatural1] || 0) + 20;
+      } else {
+        // Two different
+        finalStats[geUnnatural1] = (finalStats[geUnnatural1] || 0) + 10;
+        finalStats[geUnnatural2] = (finalStats[geUnnatural2] || 0) + 10;
+      }
+      if (gePenaltyChar) {
+        finalStats[gePenaltyChar] = (finalStats[gePenaltyChar] || 0) - (geUnnatural1 === geUnnatural2 ? 20 : 10);
+      }
+    }
+    
+    let adjustedWounds = finalWounds;
+    if (gender === 'Female') {
+      finalStats.FEL += 5;
+      finalStats.S = (finalStats.S || 0) - 5;
+      adjustedWounds -= 1;
+    }
+
+    // Apply Elite Advance effects
+    const charTraits: { name: string; description: string }[] = [];
+    let finalPsyRating: number | null = null;
+    let finalInfluence = 0;
+
+    for (const eaName of selectedEliteAdvances) {
+      const ea = eliteAdvancesData.find((e: any) => e.name === eaName);
+      if (!ea) continue;
+
+      // Deduct XP cost (Mystic gets free Psyker)
+      const isMysticFreePsyker = eaName === 'Psyker' && selRole?.name === 'Mystic';
+      if (!isMysticFreePsyker) {
+        finalTotalXp -= ea.cost;
+      }
+
+      // Apply stat mods
+      if (ea.statMods) {
+        for (const [abbrev, mod] of Object.entries(ea.statMods)) {
+          if (mod && typeof mod === 'number') {
+            finalStats[abbrev] = (finalStats[abbrev] || 0) + mod;
+          }
+        }
+      }
+
+      // Apply wounds mod
+      if (ea.woundsMod) adjustedWounds += ea.woundsMod;
+
+      // Apply influence mod
+      if (ea.inflMod) finalInfluence += ea.inflMod;
+
+      // Apply aptitudes from elite advance
+      if (ea.aptitude1 && ea.aptitude1.trim()) aptitudes.push(ea.aptitude1.trim());
+      if (ea.aptitude2 && ea.aptitude2.trim()) aptitudes.push(ea.aptitude2.trim());
+
+      // Parse and add skills
+      if (ea.skills) {
+        const parsedEaSkills = parseChoiceString(ea.skills);
+        for (const s of parsedEaSkills.auto) {
+          const resolved = resolveSkill(s);
+          skillSet.set(resolved.name, resolved);
+        }
+        const choices = eaSkillChoices[eaName] || {};
+        for (let i = 0; i < parsedEaSkills.choices.length; i++) {
+          if (choices[i]) {
+            const resolved = resolveSkill(choices[i]);
+            skillSet.set(resolved.name, resolved);
+          }
+        }
+      }
+
+      // Parse and add talents
+      if (ea.talents) {
+        const parsedEaTalents = parseChoiceString(ea.talents);
+        for (const t of parsedEaTalents.auto) {
+          if (!talentList.find(x => x.name.toLowerCase() === t.toLowerCase())) {
+            talentList.push({ name: t, specialisation: null, tier: 1 });
+          }
+        }
+        const choices = eaTalentChoices[eaName] || {};
+        for (let i = 0; i < parsedEaTalents.choices.length; i++) {
+          if (choices[i]) {
+            if (!talentList.find(x => x.name.toLowerCase() === choices[i].toLowerCase())) {
+              talentList.push({ name: choices[i], specialisation: null, tier: 1 });
+            }
+          }
+        }
+      }
+
+      // Parse and add traits
+      if (ea.traits) {
+        const traitNames = ea.traits.split(',').map((s: string) => s.trim()).filter(Boolean);
+        for (const tName of traitNames) {
+          const traitDef = traitsData.find((t: any) => t.name.toLowerCase() === tName.toLowerCase());
+          charTraits.push({ name: tName, description: traitDef?.description || '' });
+        }
+      }
+
+      // Handle Psyker elite advance specifically
+      if (eaName === 'Psyker') {
+        // Sanctioned trait only with Adeptus Astra Telepathica background
+        const isSanctioned = selBackground?.name?.includes('Telepathica');
+        if (isSanctioned) {
+          finalPsyRating = (finalPsyRating || 0) + 2; // +1 from Psyker, +1 from Sanctioned
+          const sanctionedTrait = traitsData.find((t: any) => t.name === 'Sanctioned');
+          charTraits.push({ name: 'Sanctioned', description: sanctionedTrait?.description || 'Grants +1 PR (already factored in).' });
+          const soulboundTrait = traitsData.find((t: any) => t.name === 'Soul Bound');
+          charTraits.push({ name: 'Soul Bound', description: soulboundTrait?.description || 'Bound to the Emperor of Mankind.' });
+        } else {
+          finalPsyRating = (finalPsyRating || 0) + 1; // Rogue psykers get PR +1
+          const rogueCor = rogueCorruptionManual ? parseInt(rogueCorruptionManual) : (rolledRogueCorruption ?? 0);
+          charTraits.push({ name: 'Rogue Psyker', description: `Not sanctioned. Began with an additional ${rogueCor} Corruption points as their mind abruptly opened to the Warp.` });
+        }
+      }
+    }
+
+    // Apply homeworld elite advance alternative psy rating bonus (e.g., Black Ship + Psyker → PR +1)
+    if (hwAltActive && hwAlt.psyRatingBonus) {
+      finalPsyRating = (finalPsyRating || 0) + hwAlt.psyRatingBonus;
+    }
+
+    // Add abilities from Homeworld, Background, and Role specials
+    if (selHomeworld?.special) {
+      const abilityName = selHomeworld.special.split(':')[0]?.trim() || 'Homeworld Ability';
+      const hwLabel = selHomeworld.variant === '-' ? selHomeworld.name : `${selHomeworld.name} — ${selHomeworld.variant}`;
+      charTraits.push({
+        name: abilityName,
+        description: selHomeworld.special,
+        type: 'ability',
+        source: `Homeworld: ${hwLabel}`,
+      } as any);
+    }
+    if (selBackground?.special) {
+      const abilityName = selBackground.special.split(':')[0]?.trim() || 'Background Ability';
+      charTraits.push({
+        name: abilityName,
+        description: selBackground.special,
+        type: 'ability',
+        source: `Background: ${selBackground.name}`,
+      } as any);
+    }
+    if (selRole?.ability) {
+      const abilityName = selRole.ability.split(':')[0]?.trim() || 'Role Ability';
+      charTraits.push({
+        name: abilityName,
+        description: selRole.ability,
+        type: 'ability',
+        source: `Role: ${selRole.name}`,
+      } as any);
+    }
+
+    if (selHomeworld?.variant === 'Black Ship' && !hwAltActive) {
+      charTraits.push({
+        name: 'Not Quite Human (1)',
+        description: 'Suffer a -10 penalty to Fellowship tests with baseline humans, and they gain a +10 to Scrutiny against you. (From Black Ship Homeworld)',
+      });
+    }
+
+    // Add Gene-Enhanced traits (Unnatural Characteristic, Not Quite Human)
+    if (isGeneEnhanced) {
+      if (geUnnatural1 === geUnnatural2) {
+        const charName = CHAR_FULL_NAMES[geUnnatural1] || geUnnatural1;
+        charTraits.push({
+          name: `Unnatural ${charName} (2)`,
+          description: `Automatically gained from Gene-Enhanced background. Bonus +20 to ${charName} tests.`,
+        });
+        charTraits.push({
+          name: 'Not Quite Human (1)',
+          description: 'Suffer a -10 penalty to Fellowship tests with baseline humans, and they gain a +10 to Scrutiny against you. (From doubled Gene-Enhanced Unnatural Characteristic).',
+        });
+      } else {
+        const charName1 = CHAR_FULL_NAMES[geUnnatural1] || geUnnatural1;
+        const charName2 = CHAR_FULL_NAMES[geUnnatural2] || geUnnatural2;
+        charTraits.push({
+          name: `Unnatural ${charName1} (1)`,
+          description: `Automatically gained from Gene-Enhanced background. Bonus +10 to ${charName1} tests.`,
+        });
+        charTraits.push({
+          name: `Unnatural ${charName2} (1)`,
+          description: `Automatically gained from Gene-Enhanced background. Bonus +10 to ${charName2} tests.`,
+        });
+      }
+    }
+
+    // Add Divination extra talents
+    if (divinationOverrideTalents.trim()) {
+      const parts = divinationOverrideTalents.split(',').map(s => s.trim()).filter(Boolean);
+      for (const p of parts) {
+        if (!talentList.find(t => t.name === p)) {
+          talentList.push({ name: p, specialisation: null, tier: 1 });
+        }
+      }
+    }
+
+    // Divination trait
+    if (divinationRolled) {
+      charTraits.push({
+        name: `Divination: ${divinationRolled.prophecy}`,
+        description: divinationRolled.effect,
+        type: 'trait',
+        source: 'Divination',
+      } as any);
+    }
+
+    // Add background-granted traits (e.g., Mechanicus Implants)
+    if (!isGeneEnhanced && selBackground?.traits && selBackground.traits.trim()) {
+      const bgTraitNames = selBackground.traits.split(',').map((s: string) => s.trim()).filter(Boolean);
+      for (const tName of bgTraitNames) {
+        // Don't re-add if already in charTraits (e.g., from elite advances)
+        if (!charTraits.find((ct: any) => ct.name.toLowerCase() === tName.toLowerCase() && ct.type !== 'ability')) {
+          const traitDef = traitsData.find((t: any) => t.name.toLowerCase() === tName.toLowerCase());
+          charTraits.push({ name: tName, description: traitDef?.description || '' });
+        }
+      }
+    }
+
+    const dedupApts = Array.from(new Set(aptitudes));
+
+    onComplete({
+      name: charName,
+      characteristics: finalStats,
+      aptitudes: dedupApts,
+      skills: Array.from(skillSet.values()),
+      talents: talentList,
+      total_xp: finalTotalXp,
+      fate_points_max: finalFate,
+      wounds: adjustedWounds,
+      insanity_points: finalInsanity,
+      corruption: finalCorruption,
+      psy_rating: finalPsyRating,
+      traits: charTraits,
+      elite_advances: selectedEliteAdvances,
+      influence: finalInfluence,
+    });
+  };
+
+  // Compute parsed values (must be before any early returns to preserve hook order)
+  // Check if the homeworld has an elite advance alternative that's currently active
+  const hwAlt = selHomeworld?.eliteAdvanceAlternative;
+  const hwAltActive = hwAlt && hwAltChosen;
+
+  const hwSkillsStr = hwAltActive ? (hwAlt.skills || '') : (selHomeworld?.skills || '');
+  const hwTalentsStr = hwAltActive ? (hwAlt.talents || '') : (selHomeworld?.talents || '');
+  const hwMixedStr = hwAltActive ? '' : (selHomeworld?.mixedChoices || ''); // No mixed choices in alt mode
+
+  const parsedHwSkills = selHomeworld ? parseChoiceString(hwSkillsStr) : { auto: [], choices: [] };
+  const parsedHwTalents = selHomeworld ? parseChoiceString(hwTalentsStr) : { auto: [], choices: [] };
+  const parsedHwMixed = selHomeworld ? parseChoiceString(hwMixedStr) : { auto: [], choices: [] };
+
+  const parsedBgSkills = selBackground ? parseChoiceString(selBackground.skills) : { auto: [], choices: [] };
+  const parsedBgTalents = selBackground ? parseChoiceString(selBackground.talents) : { auto: [], choices: [] };
+  const parsedRoleTalent = selRole ? parseChoiceString(selRole.talent) : { auto: [], choices: [] };
+  const roleTalentOptions = [...parsedRoleTalent.auto, ...parsedRoleTalent.choices.flat()];
+
+  const expandedHwSkills = parsedHwSkills.auto;
+  const expandedHwSkillChoices = parsedHwSkills.choices;
+  const expandedHwTalents = parsedHwTalents.auto;
+  const expandedHwTalentChoices = parsedHwTalents.choices;
+  const expandedHwMixedChoices = parsedHwMixed.choices;
+
+  const expandedBgTalents = parsedBgTalents.auto;
+  const expandedBgSkills = parsedBgSkills.auto;
+  const expandedBgTalentChoices = parsedBgTalents.choices;
+  const expandedRoleTalentOptions = roleTalentOptions;
+
+  // Step validation: ensure all choices are made before proceeding
+  const allHwSkillChoicesMade = expandedHwSkillChoices.every((_: string[], i: number) => !!hwSkillChoices[i]);
+  const allHwTalentChoicesMade = expandedHwTalentChoices.every((_: string[], i: number) => !!hwTalentChoices[i]);
+  const allHwMixedChoicesMade = expandedHwMixedChoices.every((_: string[], i: number) => !!hwMixedChoices[i]);
+  const step1Valid = !!selHomeworld && !!hwAptChoice && allHwSkillChoicesMade && allHwTalentChoicesMade && allHwMixedChoicesMade;
+
+  const allBgSkillChoicesMade = parsedBgSkills.choices.every((_: string[], i: number) => !!bgSkillChoices[i]);
+  const allBgTalentChoicesMade = parsedBgTalents.choices.every((_: string[], i: number) => !!bgTalentChoices[i]);
+  const step2Valid = isGeneEnhanced
+    ? (!!selBackground && !!geUnnatural1 && !!geUnnatural2 && !!gePenaltyChar
+      && Object.keys(geSkillChoices).length === 4 && Object.values(geSkillChoices).every(Boolean)
+      && Object.keys(geTalentChoices).length === 2 && Object.values(geTalentChoices).every(Boolean)
+      && !!bgAptChoice)
+    : (!!selBackground && !!bgAptChoice && allBgSkillChoicesMade && allBgTalentChoicesMade);
+
+  const roleAptChoicesNeeded = (selRole?.aptitudes || []).filter((slot: string) => {
+    const cleaned = slot.replace(/,\s*$/, '').trim();
+    const options = cleaned.split(' or ').map((s: string) => s.trim());
+    return options.length > 1;
+  });
+  const allRoleAptsMade = roleAptChoicesNeeded.every((_: string, i: number) => !!roleAptChoices[i]);
+  const step3Valid = !!selRole && !!roleTalentChoice && allRoleAptsMade;
+
+  // Step 4: all skill/talent choices for SELECTED elite advances
+  const step4Valid = selectedEliteAdvances.every(eaName => {
+    const ea = eliteAdvancesData.find((e: any) => e.name === eaName);
+    if (!ea) return true;
+    
+    let skillsStr = ea.skills;
+    let talentsStr = ea.talents;
+    if (hwAlt && hwAltChosen && eaName === hwAlt.advanceName) {
+      skillsStr = hwAlt.skills;
+      talentsStr = hwAlt.talents;
+    }
+    
+    const parsedSkills = skillsStr ? parseChoiceString(skillsStr) : { auto: [], choices: [] };
+    const parsedTalents = talentsStr ? parseChoiceString(talentsStr) : { auto: [], choices: [] };
+    
+    const skChoices = eaSkillChoices[eaName] || {};
+    const tlChoices = eaTalentChoices[eaName] || {};
+    const allSkills = parsedSkills.choices.every((_: string[], i: number) => !!skChoices[i]);
+    const allTalents = parsedTalents.choices.every((_: string[], i: number) => !!tlChoices[i]);
+    return allSkills && allTalents;
+  });
+
+  // Step 5: all stats entered + WP >= 40 if Psyker without Mystic
+  const allStatsEntered = CHAR_ABBREVS.every(a => charStats[a] && charStats[a] > 0);
+  const psykerWithoutMystic = selectedEliteAdvances.includes('Psyker') && selRole?.name !== 'Mystic';
+  const wpMeetsRequirement = !psykerWithoutMystic || (charStats['WP'] || 0) >= 40;
+  const step5Valid = allStatsEntered && wpMeetsRequirement;
+
+  if (loading) return <div className="page" style={{ textAlign: 'center', padding: '60px 20px' }}><div className="skeleton skeleton--title" /></div>;
+
+  const stepTitles = ['Name', 'Homeworld', 'Background', 'Role', 'Elite Advances', 'Characteristics', 'Divination', 'Review'];
+
+  // Group homeworlds by base name
+  const hwGroups: Record<string, any[]> = {};
+  for (const hw of homeworlds) {
+    const base = hw.name || 'Unknown';
+    if (!hwGroups[base]) hwGroups[base] = [];
+    hwGroups[base].push(hw);
+  }
+
+  return (
+    <div className="page" style={{ maxWidth: 600, margin: '0 auto' }}>
+      <datalist id="weapon-families">
+        {weaponFamilies.map(f => <option key={f} value={f} />)}
+      </datalist>
+      
+      {/* Progress */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 'var(--space-md)' }}>
+        {stepTitles.map((t, i) => (
+          <div key={t} style={{
+            flex: 1, height: 4, borderRadius: 2,
+            background: i <= step ? 'var(--theme-color, #8b5cf6)' : 'var(--border-color)',
+            transition: 'background 0.3s'
+          }} />
+        ))}
+      </div>
+      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: 'var(--space-sm)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        Step {step + 1} of {stepTitles.length}: {stepTitles[step]}
+      </div>
+
+      {/* Running selections summary */}
+      {step > 0 && (
+        <div style={{
+          display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 'var(--space-md)',
+          padding: '8px 10px', borderRadius: 'var(--radius-md, 8px)',
+          background: 'var(--bg-card, rgba(255,255,255,0.03))',
+          border: '1px solid var(--border-color)',
+          fontSize: '0.72rem', alignItems: 'center'
+        }}>
+          {charName && (
+            <span style={{ cursor: 'pointer', opacity: step === 0 ? 1 : 0.85 }} onClick={() => setStep(0)}
+              title="Click to edit">
+              <strong>{charName}</strong>{gender ? ` (${gender.charAt(0)})` : ''}
+            </span>
+          )}
+          {selHomeworld && (
+            <>
+              <span style={{ opacity: 0.3 }}>›</span>
+              <span className="badge" style={{ fontSize: '0.68rem', padding: '1px 6px', cursor: 'pointer' }}
+                onClick={() => setStep(1)} title="Click to edit homeworld">
+                {selHomeworld.variant === '-' ? selHomeworld.name : `${selHomeworld.name} — ${selHomeworld.variant}`}
+                {hwAltChosen && hwAlt ? ` ⚡` : ''}
+              </span>
+            </>
+          )}
+          {selBackground && step > 2 && (
+            <>
+              <span style={{ opacity: 0.3 }}>›</span>
+              <span className="badge" style={{ fontSize: '0.68rem', padding: '1px 6px', cursor: 'pointer' }}
+                onClick={() => setStep(2)} title="Click to edit background">
+                {selBackground.name}
+              </span>
+            </>
+          )}
+          {selRole && step > 3 && (
+            <>
+              <span style={{ opacity: 0.3 }}>›</span>
+              <span className="badge" style={{ fontSize: '0.68rem', padding: '1px 6px', cursor: 'pointer' }}
+                onClick={() => setStep(3)} title="Click to edit role">
+                {selRole.name}
+              </span>
+            </>
+          )}
+          {selectedEliteAdvances.length > 0 && step > 4 && (
+            <>
+              <span style={{ opacity: 0.3 }}>›</span>
+              <span className="badge" style={{ fontSize: '0.68rem', padding: '1px 6px', cursor: 'pointer',
+                background: 'rgba(139, 92, 246, 0.15)' }}
+                onClick={() => setStep(4)} title="Click to edit elite advances">
+                {selectedEliteAdvances.join(', ')}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Step 0: Name & Gender */}
+      {step === 0 && (
+        <div>
+          <h2 style={{ marginBottom: 'var(--space-md)' }}>Character Info</h2>
+          <div className="stat-edit-form__label">Name</div>
+          <input className="input" placeholder="Enter character name" value={charName}
+            onChange={e => setCharName(e.target.value)} autoFocus
+            style={{ marginBottom: 'var(--space-md)' }} />
+            
+          <div className="stat-edit-form__label">Gender</div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 'var(--space-md)' }}>
+            <button className={`btn ${gender === 'Male' ? 'btn--primary' : ''}`} onClick={() => { setGender('Male'); setGenderChoice1(''); setGenderChoice2(''); }}>Male</button>
+            <button className={`btn ${gender === 'Female' ? 'btn--primary' : ''}`} onClick={() => { setGender('Female'); setGenderChoice1(''); setGenderChoice2(''); }}>Female</button>
+          </div>
+          
+          {gender === 'Male' && (
+            <div style={{ marginBottom: 'var(--space-md)' }}>
+              <div className="stat-edit-form__label" style={{ fontSize: '0.75rem' }}>Male bonuses: +Athletics. Choose 1:</div>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {['Command', 'Intimidate', 'Logic'].map(opt => (
+                  <button key={opt} className={`btn ${genderChoice1 === opt ? 'btn--primary' : ''}`}
+                    style={{ fontSize: '0.75rem', padding: '2px 8px' }} onClick={() => setGenderChoice1(opt)}>{opt}</button>
+                ))}
+              </div>
+            </div>
+          )}
+          {gender === 'Female' && (
+            <div style={{ marginBottom: 'var(--space-md)' }}>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: 'var(--space-sm)' }}>
+                Female bonuses: +5 FEL, -5 S, -1 Wounds.
+              </div>
+              <div className="stat-edit-form__label" style={{ fontSize: '0.75rem' }}>Choose 1:</div>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 'var(--space-sm)' }}>
+                {['Charm', 'Deceive'].map(opt => (
+                  <button key={opt} className={`btn ${genderChoice1 === opt ? 'btn--primary' : ''}`}
+                    style={{ fontSize: '0.75rem', padding: '2px 8px' }} onClick={() => setGenderChoice1(opt)}>{opt}</button>
+                ))}
+              </div>
+              <div className="stat-edit-form__label" style={{ fontSize: '0.75rem' }}>Choose 1:</div>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {['Inquiry', 'Scrutiny'].map(opt => (
+                  <button key={opt} className={`btn ${genderChoice2 === opt ? 'btn--primary' : ''}`}
+                    style={{ fontSize: '0.75rem', padding: '2px 8px' }} onClick={() => setGenderChoice2(opt)}>{opt}</button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Step 1: Homeworld */}
+      {step === 1 && !selHomeworld && (
+        <div>
+          <h2 style={{ marginBottom: 'var(--space-md)' }}>Choose Homeworld</h2>
+          <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+            {Object.entries(hwGroups).map(([base, variants]) => (
+              <div key={base} style={{ marginBottom: 'var(--space-sm)' }}>
+                <div className="skill-category">{base}</div>
+                {variants.map((hw, i) => (
+                  <div key={i} className="skill-row" style={{ cursor: 'pointer' }}
+                onClick={() => { setSelHomeworld(hw); setHwAptChoice(hw.aptitude1); setHwSkillChoices({}); setHwTalentChoices({}); setHwMixedChoices({}); }}>
+                    <span className="skill-row__name" style={{ flex: 1 }}>
+                      {hw.variant === '-' ? base : `${base} — ${hw.variant}`}
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      +{hw.charPlus1}/+{hw.charPlus2} –{hw.charMinus}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {step === 1 && selHomeworld && (
+        <div>
+          <h2 style={{ marginBottom: 'var(--space-sm)' }}>
+            {selHomeworld.variant === '-' ? selHomeworld.name : `${selHomeworld.name} — ${selHomeworld.variant}`}
+          </h2>
+          <div style={{ fontSize: '0.85rem', marginBottom: 'var(--space-sm)' }}>
+            <span style={{ color: 'var(--color-success, #22c55e)' }}>+{selHomeworld.charPlus1}, +{selHomeworld.charPlus2}</span>
+            {' · '}
+            <span style={{ color: 'var(--color-danger, #ef4444)' }}>–{selHomeworld.charMinus}</span>
+            {' · '}Fate: {selHomeworld.fate} ({selHomeworld.blessing})
+            {' · '}Wounds: {selHomeworld.wounds}
+          </div>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: 'var(--space-md)', maxHeight: 150, overflowY: 'auto' }}>
+            {selHomeworld.special}
+          </div>
+
+          {selHomeworld.variant === 'Black Ship' && !hwAltChosen && (
+            <div style={{ marginBottom: 'var(--space-sm)' }}>
+              <div className="stat-edit-form__label">Bonus Trait:</div>
+              <span className="badge" style={{ fontSize: '0.75rem', background: 'rgba(139, 92, 246, 0.2)' }}>Not Quite Human (1)</span>
+            </div>
+          )}
+
+          {/* Alternate path toggle for homeworlds with elite advance alternatives */}
+          {hwAlt && (
+            <div style={{
+              marginBottom: 'var(--space-md)', padding: 'var(--space-sm)',
+              borderRadius: 'var(--radius-md, 8px)',
+              border: `1px solid ${hwAltChosen ? 'var(--theme-color, #8b5cf6)' : 'var(--color-warning, #f59e0b)'}`,
+              background: hwAltChosen ? 'rgba(139, 92, 246, 0.08)' : 'rgba(245, 158, 11, 0.06)'
+            }}>
+              <div style={{ fontWeight: 600, marginBottom: 6, fontSize: '0.85rem' }}>
+                ⚡ Do you intend to take the <strong>{hwAlt.advanceName}</strong> Elite Advance?
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: 8 }}>
+                This changes which skills and talents your homeworld grants.
+                {hwAlt.psyRatingBonus > 0 && ` Also grants +${hwAlt.psyRatingBonus} Psy Rating.`}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className={`btn ${hwAltChosen ? '' : 'btn--primary'}`}
+                  style={{ fontSize: '0.75rem', padding: '4px 16px' }}
+                  onClick={() => { setHwAltChosen(false); setHwTalentChoices({}); setHwSkillChoices({}); setHwMixedChoices({}); }}>
+                  No
+                </button>
+                <button className={`btn ${hwAltChosen ? 'btn--primary' : ''}`}
+                  style={{ fontSize: '0.75rem', padding: '4px 16px' }}
+                  onClick={() => { setHwAltChosen(true); setHwTalentChoices({}); setHwSkillChoices({}); setHwMixedChoices({}); }}>
+                  Yes — Use Alternate Path
+                </button>
+              </div>
+              {hwAltChosen && (
+                <div style={{ marginTop: 8, fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                  <strong>Alternate Talents:</strong> {hwAlt.talents || '(same)'}
+                  {hwAlt.skills && <><br/><strong>Alternate Skills:</strong> {hwAlt.skills}</>}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="stat-edit-form__label">Choose Aptitude</div>
+          <div style={{ display: 'flex', gap: 'var(--space-sm)', marginBottom: 'var(--space-sm)', flexWrap: 'wrap', alignItems: 'center' }}>
+            {[selHomeworld.aptitude1, selHomeworld.aptitude2].map(apt => (
+              <button key={apt} className={`btn ${hwAptChoice === apt ? 'btn--primary' : ''}`}
+                style={{ flex: 1 }} onClick={() => setHwAptChoice(apt)}>
+                {apt}
+              </button>
+            ))}
+            {hwAptChoice && (() => {
+              const priorApts = ['General'];
+              const resolved = resolveAptitudeDuplicate(hwAptChoice, priorApts);
+              const isDuplicate = resolved !== hwAptChoice;
+              if (!isDuplicate) return null;
+              return (
+                <div style={{ width: '100%', fontSize: '0.75rem', marginTop: 4 }}>
+                  {resolved ? (
+                    <span style={{ color: 'var(--color-warning, #f59e0b)' }}>
+                      {hwAptChoice} already owned → granting <strong>{resolved}</strong> instead
+                    </span>
+                  ) : (
+                    <span style={{ color: 'var(--color-danger, #ef4444)' }}>
+                      {hwAptChoice} and its secondary are both already owned
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+          
+          {/* Homeworld Auto skills */}
+          {expandedHwSkills.length > 0 && (
+            <div style={{ marginBottom: 'var(--space-sm)' }}>
+              <div className="stat-edit-form__label">Skills (Auto)</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                {expandedHwSkills.map((s, idx) => hasPickOne(s) ? (
+                  <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span className="badge" style={{ fontSize: '0.75rem' }}>{s.replace(/\(Pick One\)/i, '(').replace(/\)$/, '')}</span>
+                    <input className="input" style={{ fontSize: '0.75rem', padding: '2px 6px', width: 120 }}
+                      placeholder="type specialisation"
+                      value={hwPickOneInputs[`hw-skill-auto-${idx}`] || ''}
+                      onChange={e => setHwPickOneInputs({ ...hwPickOneInputs, [`hw-skill-auto-${idx}`]: e.target.value })} />
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>)</span>
+                  </div>
+                ) : (
+                  <span key={idx} className="badge" style={{ fontSize: '0.75rem' }}>{s}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Homeworld Skill choices */}
+          {expandedHwSkillChoices.map((opts, i) => (
+            <div key={`hw-sk-${i}`} style={{ marginBottom: 'var(--space-xs)' }}>
+              <div className="stat-edit-form__label" style={{ fontSize: '0.75rem' }}>Choose skill:</div>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {opts.map(opt => (
+                  <button key={opt} className={`btn ${hwSkillChoices[i] === opt ? 'btn--primary' : ''}`}
+                    style={{ fontSize: '0.75rem', padding: '2px 8px' }}
+                    onClick={() => setHwSkillChoices({ ...hwSkillChoices, [i]: opt })}>
+                    {opt}
+                  </button>
+                ))}
+              </div>
+              {hwSkillChoices[i] && hasPickOne(hwSkillChoices[i]) && (
+                <input className="input" style={{ fontSize: '0.75rem', padding: '2px 6px', width: 200, marginTop: 4 }}
+                  placeholder="type specialisation for Pick One"
+                  value={hwPickOneInputs[`hw-skill-choice-${i}`] || ''}
+                  onChange={e => setHwPickOneInputs({ ...hwPickOneInputs, [`hw-skill-choice-${i}`]: e.target.value })} />
+              )}
+            </div>
+          ))}
+
+          {/* Homeworld Auto talents */}
+          {expandedHwTalents.length > 0 && (
+            <div style={{ marginBottom: 'var(--space-sm)', marginTop: 'var(--space-sm)' }}>
+              <div className="stat-edit-form__label">Talents (Auto)</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                {expandedHwTalents.map((t, idx) => hasPickOne(t) ? (
+                  <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span className="badge" style={{ fontSize: '0.75rem' }}>{t.replace(/Pick One/i, '').replace(/\(\s*\)/, '(')}</span>
+                    <input className="input" style={{ fontSize: '0.75rem', padding: '2px 6px', width: 120 }}
+                      placeholder="type specialisation"
+                      list={t.toLowerCase().includes('weapon training') ? 'weapon-families' : undefined}
+                      value={hwPickOneInputs[`hw-talent-auto-${idx}`] || ''}
+                      onChange={e => setHwPickOneInputs({ ...hwPickOneInputs, [`hw-talent-auto-${idx}`]: e.target.value })} />
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>)</span>
+                  </div>
+                ) : (
+                  <span key={idx} className="badge" style={{ fontSize: '0.75rem' }}>{t}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Homeworld Talent choices */}
+          {expandedHwTalentChoices.map((opts, i) => (
+            <div key={`hw-tal-${i}`} style={{ marginBottom: 'var(--space-md)' }}>
+              <div className="stat-edit-form__label" style={{ fontSize: '0.75rem' }}>Choose talent:</div>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {opts.map(opt => (
+                  <button key={opt} className={`btn ${hwTalentChoices[i] === opt ? 'btn--primary' : ''}`}
+                    style={{ fontSize: '0.75rem', padding: '2px 8px' }}
+                    title={getTalentDescription(opt)}
+                    onClick={() => setHwTalentChoices({ ...hwTalentChoices, [i]: opt })}>
+                    {opt}
+                  </button>
+                ))}
+              </div>
+              {hwTalentChoices[i] && getTalentDescription(hwTalentChoices[i]) && (
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: 4 }}>
+                  {getTalentDescription(hwTalentChoices[i])}
+                </div>
+              )}
+              {hwTalentChoices[i] && hasPickOne(hwTalentChoices[i]) && (
+                <input className="input" style={{ fontSize: '0.75rem', padding: '2px 6px', width: 200, marginTop: 4 }}
+                  placeholder="type specialisation for Pick One"
+                  list={hwTalentChoices[i].toLowerCase().includes('weapon training') ? 'weapon-families' : undefined}
+                  value={hwPickOneInputs[`hw-talent-choice-${i}`] || ''}
+                  onChange={e => setHwPickOneInputs({ ...hwPickOneInputs, [`hw-talent-choice-${i}`]: e.target.value })} />
+              )}
+            </div>
+          ))}
+
+          {/* Homeworld Mixed choices (Skill OR Talent) */}
+          {expandedHwMixedChoices.map((opts, i) => (
+            <div key={`hw-mix-${i}`} style={{ marginBottom: 'var(--space-md)' }}>
+              <div className="stat-edit-form__label" style={{ fontSize: '0.75rem' }}>Choose Skill or Talent:</div>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {opts.map(opt => (
+                  <button key={opt} className={`btn ${hwMixedChoices[i] === opt ? 'btn--primary' : ''}`}
+                    style={{ fontSize: '0.75rem', padding: '2px 8px' }}
+                    title={opt.startsWith('Talent:') ? getTalentDescription(opt.substring(8).trim()) : ''}
+                    onClick={() => setHwMixedChoices({ ...hwMixedChoices, [i]: opt })}>
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          <button className="btn" style={{ fontSize: '0.8rem' }} onClick={() => setSelHomeworld(null)}>← Change Homeworld</button>
+        </div>
+      )}
+
+      {/* Step 2: Background */}
+      {step === 2 && !selBackground && (
+        <div>
+          <h2 style={{ marginBottom: 'var(--space-md)' }}>Choose Background</h2>
+          <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+            {backgrounds.map((bg: any) => (
+              <div key={bg.name} className="skill-row" style={{ cursor: 'pointer' }}
+                onClick={() => { setSelBackground(bg); setBgAptChoice(bg.aptitude1); setBgSkillChoices({}); setBgTalentChoices({}); }}>
+                <span className="skill-row__name" style={{ flex: 1 }}>{bg.name}</span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{bg.aptitude1}/{bg.aptitude2}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {step === 2 && selBackground && (
+        <div>
+          <h2 style={{ marginBottom: 'var(--space-sm)' }}>{selBackground.name}</h2>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: 'var(--space-sm)', maxHeight: 100, overflowY: 'auto' }}>
+            {selBackground.special}
+          </div>
+
+          {/* Aptitude choice */}
+          <div className="stat-edit-form__label">Choose Aptitude</div>
+          <div style={{ display: 'flex', gap: 'var(--space-sm)', marginBottom: 'var(--space-md)', flexWrap: 'wrap', alignItems: 'center' }}>
+            {[selBackground.aptitude1, selBackground.aptitude2].filter(Boolean).map((apt: string) => (
+              <button key={apt} className={`btn ${bgAptChoice === apt ? 'btn--primary' : ''}`}
+                style={{ flex: 1 }} onClick={() => setBgAptChoice(apt)}>
+                {apt}
+              </button>
+            ))}
+            {bgAptChoice && (() => {
+              const priorApts = ['General'];
+              if (selHomeworld && hwAptChoice) {
+                const hwResolved = resolveAptitudeDuplicate(hwAptChoice, priorApts);
+                if (hwResolved) priorApts.push(hwResolved);
+              }
+              const resolved = resolveAptitudeDuplicate(bgAptChoice, priorApts);
+              const isDuplicate = resolved !== bgAptChoice;
+              if (!isDuplicate) return null;
+              return (
+                <div style={{ width: '100%', fontSize: '0.75rem', marginTop: 4 }}>
+                  {resolved ? (
+                    <span style={{ color: 'var(--color-warning, #f59e0b)' }}>
+                      {bgAptChoice} already owned → granting <strong>{resolved}</strong> instead
+                    </span>
+                  ) : (
+                    <span style={{ color: 'var(--color-danger, #ef4444)' }}>
+                      {bgAptChoice} and its secondary are both already owned
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+
+
+
+          {isGeneEnhanced ? (
+            <div className="gene-enhanced-section">
+              <div style={{ padding: '12px', background: 'var(--bg-tertiary)', borderRadius: '8px', marginBottom: '16px' }}>
+                <p style={{ fontSize: '0.85rem', marginBottom: '12px' }}>
+                  Gene-Enhanced characters must choose <strong>Two Unnatural Characteristics</strong> to receive a bonus, and <strong>One Penalty Characteristic</strong> to receive a penalty.
+                </p>
+                
+                <div style={{ display: 'grid', gap: '8px', marginBottom: '12px' }}>
+                  <label className="stat-edit-form__label">
+                    Unnatural Characteristic 1
+                    <select className="input" value={geUnnatural1} onChange={e => setGeUnnatural1(e.target.value)}>
+                      <option value="">-- Select --</option>
+                      {['WS', 'BS', 'S', 'T', 'AG', 'INT', 'PER', 'WP', 'FEL'].map(c => (
+                        <option key={c} value={c}>{CHAR_FULL_NAMES[c]} ({c})</option>
+                      ))}
+                    </select>
+                  </label>
+                  
+                  <label className="stat-edit-form__label">
+                    Unnatural Characteristic 2
+                    <select className="input" value={geUnnatural2} onChange={e => setGeUnnatural2(e.target.value)}>
+                      <option value="">-- Select --</option>
+                      {['WS', 'BS', 'S', 'T', 'AG', 'INT', 'PER', 'WP', 'FEL'].map(c => (
+                        <option key={c} value={c}>{CHAR_FULL_NAMES[c]} ({c})</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                
+                {geUnnatural1 && geUnnatural2 && (
+                  <div style={{ marginBottom: '12px', padding: '8px', background: 'rgba(0,0,0,0.2)', borderRadius: '4px', fontSize: '0.8rem' }}>
+                    {geUnnatural1 === geUnnatural2 ? (
+                      <span style={{ color: 'var(--color-warning)' }}><strong>Doubled:</strong> +20 to {CHAR_FULL_NAMES[geUnnatural1]}, requires -20 Penalty, gain Not Quite Human.</span>
+                    ) : (
+                      <span style={{ color: 'var(--color-success)' }}><strong>Split:</strong> +10 to {CHAR_FULL_NAMES[geUnnatural1]} and {CHAR_FULL_NAMES[geUnnatural2]}, requires -10 Penalty.</span>
+                    )}
+                  </div>
+                )}
+                
+                <label className="stat-edit-form__label">
+                  Penalty Characteristic
+                  <select className="input" value={gePenaltyChar} onChange={e => setGePenaltyChar(e.target.value)}>
+                    <option value="">-- Select --</option>
+                    {['WS', 'BS', 'S', 'T', 'AG', 'INT', 'PER', 'WP', 'FEL']
+                      .filter(c => c !== geUnnatural1 && c !== geUnnatural2)
+                      .map(c => (
+                      <option key={c} value={c}>{CHAR_FULL_NAMES[c]} ({c})</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              {geUnnatural1 && geUnnatural2 && (
+                <>
+                  <div style={{ marginBottom: '16px' }}>
+                    <div className="stat-edit-form__label">Choose 4 Skills (Trained / Rank 2)</div>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                      Must share the governing characteristic of your Unnatural choices ({geUnnatural1}{geUnnatural1 !== geUnnatural2 ? ` or ${geUnnatural2}` : ''}).
+                    </p>
+                    {Array.from({ length: 4 }).map((_, i) => {
+                      const availableSkills = BASE_SKILLS.filter(s => s.characteristic === geUnnatural1 || s.characteristic === geUnnatural2);
+                      const currentVal = geSkillChoices[i] || '';
+                      
+                      return (
+                        <select key={i} className="input" value={currentVal} 
+                          onChange={e => setGeSkillChoices(prev => ({ ...prev, [i]: e.target.value }))}
+                          style={{ marginBottom: '4px' }}>
+                          <option value="">-- Choose Skill {i + 1} --</option>
+                          {availableSkills.map(s => {
+                            // Disable if chosen in another slot
+                            const isChosenElsewhere = Object.entries(geSkillChoices).some(([key, val]) => val === s.name && key !== String(i));
+                            return <option key={s.name} value={s.name} disabled={isChosenElsewhere}>{s.name} ({s.characteristic})</option>;
+                          })}
+                        </select>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ marginBottom: '16px' }}>
+                    <div className="stat-edit-form__label">Choose 2 Talents (Tier 1 or 2)</div>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                      Must share an aptitude with your Unnatural choices.
+                    </p>
+                    {Array.from({ length: 2 }).map((_, i) => {
+                      const validApts = [...(CHARACTERISTIC_APTITUDES[geUnnatural1] || []), ...(CHARACTERISTIC_APTITUDES[geUnnatural2] || [])].flat();
+                      const availableTalents = talentsData.filter(t => 
+                        t.tier <= 2 && 
+                        (validApts.includes(t.aptitude1) || validApts.includes(t.aptitude2))
+                      );
+                      const currentVal = geTalentChoices[i] || '';
+                      
+                      return (
+                        <select key={i} className="input" value={currentVal} 
+                          onChange={e => setGeTalentChoices(prev => ({ ...prev, [i]: e.target.value }))}
+                          style={{ marginBottom: '4px' }}>
+                          <option value="">-- Choose Talent {i + 1} --</option>
+                          {availableTalents.map(t => {
+                            const isChosenElsewhere = Object.entries(geTalentChoices).some(([key, val]) => val === t.name && key !== String(i));
+                            return <option key={t.name} value={t.name} disabled={isChosenElsewhere}>{t.name} (T{t.tier})</option>;
+                          })}
+                        </select>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* Auto skills */}
+          {expandedBgSkills.length > 0 && (
+            <div style={{ marginBottom: 'var(--space-sm)' }}>
+              <div className="stat-edit-form__label">Skills (Auto)</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                {expandedBgSkills.map((s, idx) => hasPickOne(s) ? (
+                  <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span className="badge" style={{ fontSize: '0.75rem' }}>{s.replace(/\(Pick One\)/i, '(').replace(/\)$/, '')}</span>
+                    <input className="input" style={{ fontSize: '0.75rem', padding: '2px 6px', width: 120 }}
+                      placeholder="type specialisation"
+                      value={bgPickOneInputs[`skill-auto-${idx}`] || ''}
+                      onChange={e => setBgPickOneInputs({ ...bgPickOneInputs, [`skill-auto-${idx}`]: e.target.value })} />
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>)</span>
+                  </div>
+                ) : (
+                  <span key={idx} className="badge" style={{ fontSize: '0.75rem' }}>{s}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Skill choices */}
+          {parsedBgSkills.choices.map((opts, i) => (
+            <div key={i} style={{ marginBottom: 'var(--space-xs)' }}>
+              <div className="stat-edit-form__label" style={{ fontSize: '0.75rem' }}>Choose skill:</div>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {opts.map(opt => (
+                  <button key={opt} className={`btn ${bgSkillChoices[i] === opt ? 'btn--primary' : ''}`}
+                    style={{ fontSize: '0.75rem', padding: '2px 8px' }}
+                    onClick={() => setBgSkillChoices({ ...bgSkillChoices, [i]: opt })}>
+                    {opt}
+                  </button>
+                ))}
+              </div>
+              {bgSkillChoices[i] && hasPickOne(bgSkillChoices[i]) && (
+                <input className="input" style={{ fontSize: '0.75rem', padding: '2px 6px', width: 200, marginTop: 4 }}
+                  placeholder="type specialisation for Pick One"
+                  value={bgPickOneInputs[`skill-choice-${i}`] || ''}
+                  onChange={e => setBgPickOneInputs({ ...bgPickOneInputs, [`skill-choice-${i}`]: e.target.value })} />
+              )}
+            </div>
+          ))}
+
+          {/* Auto talents */}
+          {expandedBgTalents.length > 0 && (
+            <div style={{ marginBottom: 'var(--space-sm)', marginTop: 'var(--space-sm)' }}>
+              <div className="stat-edit-form__label">Talents (Auto)</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                {expandedBgTalents.map((t, idx) => hasPickOne(t) ? (
+                  <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span className="badge" style={{ fontSize: '0.75rem' }}>{t.replace(/Pick One/i, '').replace(/\(\s*\)/, '(')}</span>
+                    <input className="input" style={{ fontSize: '0.75rem', padding: '2px 6px', width: 120 }}
+                      placeholder="type specialisation"
+                      list={t.toLowerCase().includes('weapon training') ? 'weapon-families' : undefined}
+                      value={bgPickOneInputs[`talent-auto-${idx}`] || ''}
+                      onChange={e => setBgPickOneInputs({ ...bgPickOneInputs, [`talent-auto-${idx}`]: e.target.value })} />
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>)</span>
+                  </div>
+                ) : (
+                  <span key={idx} className="badge" style={{ fontSize: '0.75rem' }}>{t}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Talent choices */}
+          {expandedBgTalentChoices.map((opts, i) => (
+            <div key={i} style={{ marginBottom: 'var(--space-md)' }}>
+              <div className="stat-edit-form__label" style={{ fontSize: '0.75rem' }}>Choose talent:</div>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {opts.map(opt => (
+                  <button key={opt} className={`btn ${bgTalentChoices[i] === opt ? 'btn--primary' : ''}`}
+                    style={{ fontSize: '0.75rem', padding: '2px 8px' }}
+                    title={getTalentDescription(opt)}
+                    onClick={() => setBgTalentChoices({ ...bgTalentChoices, [i]: opt })}>
+                    {opt}
+                  </button>
+                ))}
+              </div>
+              {bgTalentChoices[i] && getTalentDescription(bgTalentChoices[i]) && (
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: 4 }}>
+                  {getTalentDescription(bgTalentChoices[i])}
+                </div>
+              )}
+              {bgTalentChoices[i] && hasPickOne(bgTalentChoices[i]) && (
+                <input className="input" style={{ fontSize: '0.75rem', padding: '2px 6px', width: 200, marginTop: 4 }}
+                  placeholder="type specialisation for Pick One"
+                  list={bgTalentChoices[i].toLowerCase().includes('weapon training') ? 'weapon-families' : undefined}
+                  value={bgPickOneInputs[`talent-choice-${i}`] || ''}
+                  onChange={e => setBgPickOneInputs({ ...bgPickOneInputs, [`talent-choice-${i}`]: e.target.value })} />
+              )}
+            </div>
+          ))}
+            </>
+          )}
+
+          <button className="btn" style={{ fontSize: '0.8rem', marginTop: 'var(--space-sm)' }}
+            onClick={() => setSelBackground(null)}>← Change Background</button>
+        </div>
+      )}
+
+      {/* Step 3: Role */}
+      {step === 3 && !selRole && (
+        <div>
+          <h2 style={{ marginBottom: 'var(--space-md)' }}>Choose Role</h2>
+          <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+            {roles.map((rl: any) => (
+              <div key={rl.name} className="skill-row" style={{ cursor: 'pointer' }}
+                onClick={() => { setSelRole(rl); setRoleTalentChoice(''); setRoleAptChoices({}); setRoleAptManual({}); }}>
+                <span className="skill-row__name" style={{ flex: 1 }}>{rl.name}</span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{rl.type}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {step === 3 && selRole && (
+        <div>
+          <h2 style={{ marginBottom: 'var(--space-sm)' }}>{selRole.name}</h2>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: 'var(--space-md)', maxHeight: 120, overflowY: 'auto' }}>
+            {selRole.ability}
+          </div>
+
+          {/* Role talent */}
+          {roleTalentOptions.length > 1 ? (
+            <div style={{ marginBottom: 'var(--space-md)' }}>
+              <div className="stat-edit-form__label">Choose Talent</div>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {roleTalentOptions.map(t => (
+                  <button key={t} className={`btn ${roleTalentChoice === t ? 'btn--primary' : ''}`}
+                    style={{ fontSize: '0.75rem', padding: '2px 8px' }}
+                    title={getTalentDescription(t)}
+                    onClick={() => setRoleTalentChoice(t)}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+              {roleTalentChoice && getTalentDescription(roleTalentChoice) && (
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: 4 }}>
+                  {getTalentDescription(roleTalentChoice)}
+                </div>
+              )}
+            </div>
+          ) : roleTalentOptions.length === 1 ? (
+            <div style={{ marginBottom: 'var(--space-md)' }}>
+              <div className="stat-edit-form__label">Talent</div>
+              <span className="badge">{roleTalentOptions[0]}</span>
+              {!roleTalentChoice && setTimeout(() => setRoleTalentChoice(roleTalentOptions[0]), 0) && null}
+            </div>
+          ) : null}
+
+          {/* Role aptitudes */}
+          <div style={{ marginBottom: 'var(--space-sm)' }}>
+            <div className="stat-edit-form__label">Aptitudes (Auto)</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {(selRole.aptitudes || []).map((slot: string, i: number) => {
+                const cleaned = slot.replace(/,\s*$/, '').trim();
+                if (!cleaned) return null;
+                const options = cleaned.split(' or ').map((s: string) => s.trim());
+                if (options.length > 1) return null;
+
+                // Build the list of aptitudes acquired chronologically BEFORE this slot
+                const priorApts: string[] = ['General'];
+                if (selHomeworld && hwAptChoice) priorApts.push(hwAptChoice);
+                if (selBackground && bgAptChoice) priorApts.push(bgAptChoice);
+                const roleAptsRaw = selRole.aptitudes || [];
+                for (let j = 0; j < i; j++) {
+                  const priorSlot = roleAptsRaw[j].replace(/,\s*$/, '').trim();
+                  if (!priorSlot) continue;
+                  const priorOptions = priorSlot.split(' or ').map((s: string) => s.trim());
+                  let priorChosen = priorOptions.length > 1 ? roleAptChoices[j] : priorOptions[0];
+                  if (priorChosen) {
+                    const priorResolved = resolveAptitudeDuplicate(priorChosen, priorApts);
+                    if (priorResolved) priorApts.push(priorResolved);
+                    else if (roleAptManual[j]) priorApts.push(roleAptManual[j]);
+                  }
+                }
+
+                const resolved = resolveAptitudeDuplicate(options[0], priorApts);
+                const isNoDuplicate = resolved === options[0];
+                const autoSwapped = resolved !== null && resolved !== options[0];
+                const needsManualPick = resolved === null;
+
+                return (
+                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    {isNoDuplicate && (
+                      <span className="badge" style={{ fontSize: '0.75rem' }}>{options[0]}</span>
+                    )}
+                    {autoSwapped && (
+                      <span className="badge" style={{ fontSize: '0.75rem' }}>
+                        <span style={{ opacity: 0.5, textDecoration: 'line-through' }}>{options[0]}</span>
+                        {' → '}{resolved}
+                      </span>
+                    )}
+                    {needsManualPick && (
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        <span className="badge" style={{ fontSize: '0.75rem', opacity: 0.5 }}>
+                          {options[0]} (duplicate)
+                        </span>
+                        <select className="input" style={{ fontSize: '0.75rem', padding: '2px 6px', width: 'auto' }}
+                          value={roleAptManual[i] || ''} onChange={e => setRoleAptManual({ ...roleAptManual, [i]: e.target.value })}>
+                          <option value="">Pick replacement...</option>
+                          {PRIMARY_CHARACTERISTICS.filter(a => !priorApts.includes(a)).map(a => <option key={a} value={a}>{a}</option>)}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Choice Aptitudes */}
+          {(selRole.aptitudes || []).map((slot: string, i: number) => {
+            const cleaned = slot.replace(/,\s*$/, '').trim();
+            if (!cleaned) return null;
+            const options = cleaned.split(' or ').map((s: string) => s.trim());
+            if (options.length <= 1) return null;
+
+            // Build the list of aptitudes acquired chronologically BEFORE this slot
+            const priorApts: string[] = ['General'];
+            if (selHomeworld && hwAptChoice) priorApts.push(hwAptChoice);
+            if (selBackground && bgAptChoice) priorApts.push(bgAptChoice);
+            const roleAptsRaw = selRole.aptitudes || [];
+            for (let j = 0; j < i; j++) {
+              const priorSlot = roleAptsRaw[j].replace(/,\s*$/, '').trim();
+              if (!priorSlot) continue;
+              const priorOptions = priorSlot.split(' or ').map((s: string) => s.trim());
+              let priorChosen = priorOptions.length > 1 ? roleAptChoices[j] : priorOptions[0];
+              if (priorChosen) {
+                const priorResolved = resolveAptitudeDuplicate(priorChosen, priorApts);
+                if (priorResolved) priorApts.push(priorResolved);
+                else if (roleAptManual[j]) priorApts.push(roleAptManual[j]);
+              }
+            }
+
+            return (
+              <div key={i} style={{ marginBottom: 'var(--space-sm)' }}>
+                <div className="stat-edit-form__label" style={{ fontSize: '0.75rem' }}>Choose from these Aptitudes:</div>
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                  {options.map(opt => {
+                    const chosen = roleAptChoices[i];
+                    return (
+                      <button key={opt} className={`btn ${chosen === opt ? 'btn--primary' : ''}`}
+                        style={{ fontSize: '0.75rem', padding: '2px 8px' }}
+                        onClick={() => setRoleAptChoices({ ...roleAptChoices, [i]: opt })}>
+                        {opt}
+                      </button>
+                    );
+                  })}
+
+                  {/* Feedback for the CHOSEN option */}
+                  {roleAptChoices[i] && (() => {
+                    const chosen = roleAptChoices[i];
+                    const resolved = resolveAptitudeDuplicate(chosen, priorApts);
+                    const autoSwapped = resolved !== null && resolved !== chosen;
+                    const needsManualPick = resolved === null;
+                    
+                    return (
+                      <>
+                        {autoSwapped && (
+                          <span style={{ fontSize: '0.75rem', marginLeft: 8 }}>
+                            → <span className="badge" style={{ padding: '2px 6px' }}>{resolved}</span>
+                          </span>
+                        )}
+                        {needsManualPick && (
+                          <div style={{ marginLeft: 8, display: 'flex', gap: 4, alignItems: 'center' }}>
+                            <span style={{ fontSize: '0.75rem', opacity: 0.5 }}>(duplicate)</span>
+                            <select className="input" style={{ fontSize: '0.75rem', padding: '2px 6px', width: 'auto' }}
+                              value={roleAptManual[i] || ''} onChange={e => setRoleAptManual({ ...roleAptManual, [i]: e.target.value })}>
+                              <option value="">Pick replacement...</option>
+                              {PRIMARY_CHARACTERISTICS.filter(a => !priorApts.includes(a)).map(a => <option key={a} value={a}>{a}</option>)}
+                            </select>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            );
+          })}
+
+          <button className="btn" style={{ fontSize: '0.8rem', marginTop: 'var(--space-sm)' }}
+            onClick={() => setSelRole(null)}>← Change Role</button>
+        </div>
+      )}
+
+      {/* Step 4: Elite Advances */}
+      {step === 4 && (
+        <div>
+          <h2 style={{ marginBottom: 'var(--space-sm)' }}>Elite Advances</h2>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: 'var(--space-md)' }}>
+            Select any Elite Advances for your character. Some are restricted by origin.
+            {selRole?.name === 'Mystic' && (
+              <span style={{ color: 'var(--color-success, #22c55e)', fontWeight: 600 }}>
+                {' '}The Mystic role grants the Psyker advance for free.
+              </span>
+            )}
+          </p>
+          {hwAltActive && (
+            <div style={{
+              fontSize: '0.8rem', padding: '6px var(--space-sm)', marginBottom: 'var(--space-sm)',
+              borderRadius: 'var(--radius-md, 8px)', border: '1px solid var(--theme-color, #8b5cf6)',
+              background: 'rgba(139, 92, 246, 0.06)'
+            }}>
+              ⚡ <strong>{hwAlt.advanceName}</strong> advance pre-selected (alternate homeworld path).
+              {hwAlt.psyRatingBonus > 0 && ` PR +${hwAlt.psyRatingBonus} will be applied.`}
+            </div>
+          )}
+          <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+            {eliteAdvancesData
+              .filter((ea: any) => ea.name !== 'Sister') // Sister excluded from chargen
+              .map((ea: any) => {
+                const isSelected = selectedEliteAdvances.includes(ea.name);
+                const isMysticFreePsyker = ea.name === 'Psyker' && selRole?.name === 'Mystic';
+                const parsedEaSkills = ea.skills ? parseChoiceString(ea.skills) : { auto: [], choices: [] };
+                const parsedEaTalents = ea.talents ? parseChoiceString(ea.talents) : { auto: [], choices: [] };
+                // Limited origins is informational only (GM approval)
+                const hasOriginNote = ea.limitedOrigins && ea.limitedOrigins.trim() && ea.limitedOrigins.trim().toLowerCase() !== 'yes';
+
+                return (
+                  <div key={ea.name} style={{
+                    marginBottom: 'var(--space-md)',
+                    padding: 'var(--space-sm)',
+                    borderRadius: 'var(--radius-md, 8px)',
+                    border: `1px solid ${isSelected ? 'var(--theme-color, #8b5cf6)' : 'var(--border-color)'}`,
+                    background: isSelected ? 'rgba(139, 92, 246, 0.08)' : 'transparent',
+                    transition: 'all 0.2s'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-xs)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <strong style={{ fontSize: '0.95rem' }}>{ea.name}</strong>
+                        <span className="badge" style={{ fontSize: '0.7rem' }}>
+                          {isMysticFreePsyker ? 'FREE (Mystic)' : `${ea.cost} XP`}
+                        </span>
+                        {ea.creationOnly && (
+                          <span className="badge" style={{ fontSize: '0.65rem', background: 'var(--color-warning, #f59e0b)', color: '#000' }}>Creation Only</span>
+                        )}
+                        {hasOriginNote && (
+                          <span className="badge" style={{ fontSize: '0.65rem', opacity: 0.7 }}>Origin: {ea.limitedOrigins}</span>
+                        )}
+                        {hwAlt && hwAltChosen && ea.name === hwAlt.advanceName && (
+                          <span className="badge" style={{ fontSize: '0.65rem', background: 'var(--theme-color, #8b5cf6)', color: '#fff' }}>Homeworld Alt Path</span>
+                        )}
+                      </div>
+                      <button
+                        className={`btn ${isSelected ? 'btn--primary' : ''}`}
+                        style={{ fontSize: '0.75rem', padding: '2px 12px' }}
+                        disabled={isMysticFreePsyker} // Can't deselect Mystic's free Psyker
+                        onClick={() => {
+                          if (isSelected) {
+                            setSelectedEliteAdvances(selectedEliteAdvances.filter(n => n !== ea.name));
+                            // If deselecting a homeworld-alt advance, reset the alt choice
+                            if (hwAlt && hwAltChosen && ea.name === hwAlt.advanceName) {
+                              setHwAltChosen(false);
+                            }
+                          } else {
+                            setSelectedEliteAdvances([...selectedEliteAdvances, ea.name]);
+                          }
+                        }}
+                      >
+                        {isSelected ? '✓ Selected' : 'Select'}
+                      </button>
+                    </div>
+
+                    {/* GM Guidance / flavour */}
+                    {ea.gmGuidance && (
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: 'var(--space-xs)', maxHeight: 60, overflowY: 'auto' }}>
+                        {ea.gmGuidance}
+                      </div>
+                    )}
+
+                    {/* Requirements (informational) */}
+                    {ea.requirements && ea.requirements.trim() && (
+                      <div style={{ fontSize: '0.7rem', color: 'var(--color-warning, #f59e0b)', marginBottom: 'var(--space-xs)' }}>
+                        ⚠ Requirements: {ea.requirements}
+                      </div>
+                    )}
+
+                    {/* Stat modifications preview */}
+                    {ea.statMods && Object.values(ea.statMods).some((v: any) => v !== 0) && (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 'var(--space-xs)' }}>
+                        {Object.entries(ea.statMods).map(([abbrev, mod]: [string, any]) => {
+                          if (!mod) return null;
+                          return (
+                            <span key={abbrev} style={{
+                              fontSize: '0.7rem', fontWeight: 600,
+                              color: mod > 0 ? 'var(--color-success, #22c55e)' : 'var(--color-danger, #ef4444)'
+                            }}>
+                              {abbrev} {mod > 0 ? '+' : ''}{mod}
+                            </span>
+                          );
+                        })}
+                        {ea.woundsMod !== 0 && (
+                          <span style={{ fontSize: '0.7rem', fontWeight: 600, color: ea.woundsMod > 0 ? 'var(--color-success, #22c55e)' : 'var(--color-danger, #ef4444)' }}>
+                            Wounds {ea.woundsMod > 0 ? '+' : ''}{ea.woundsMod}
+                          </span>
+                        )}
+                        {ea.inflMod !== 0 && (
+                          <span style={{ fontSize: '0.7rem', fontWeight: 600, color: ea.inflMod > 0 ? 'var(--color-success, #22c55e)' : 'var(--color-danger, #ef4444)' }}>
+                            INFL {ea.inflMod > 0 ? '+' : ''}{ea.inflMod}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Aptitudes */}
+                    {(ea.aptitude1 || ea.aptitude2) && (
+                      <div style={{ fontSize: '0.7rem', marginBottom: 'var(--space-xs)' }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>Aptitudes: </span>
+                        {[ea.aptitude1, ea.aptitude2].filter(Boolean).join(', ')}
+                      </div>
+                    )}
+
+                    {/* Traits */}
+                    {ea.traits && (
+                      <div style={{ fontSize: '0.7rem', marginBottom: 'var(--space-xs)' }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>Traits: </span>
+                        {ea.traits}
+                      </div>
+                    )}
+
+                    {/* Other Changes */}
+                    {ea.otherChanges && (
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: 'var(--space-xs)' }}>
+                        {ea.otherChanges}
+                      </div>
+                    )}
+
+                    {/* Arrested Development */}
+                    {ea.arrestedDevelopment && (
+                      <div style={{ fontSize: '0.7rem', color: 'var(--color-danger, #ef4444)', marginBottom: 'var(--space-xs)' }}>
+                        ⛔ {ea.arrestedDevelopment}
+                      </div>
+                    )}
+
+                    {/* Expanded skill/talent choices (only when selected) */}
+                    {isSelected && (
+                      <div style={{ marginTop: 'var(--space-xs)', paddingTop: 'var(--space-xs)', borderTop: '1px solid var(--border-color)' }}>
+                        {/* Auto skills */}
+                        {parsedEaSkills.auto.length > 0 && (
+                          <div style={{ marginBottom: 'var(--space-xs)' }}>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Skills (Auto):</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                              {parsedEaSkills.auto.map((s, idx) => (
+                                <span key={idx} className="badge" style={{ fontSize: '0.7rem' }}>{s}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {/* Skill choices */}
+                        {parsedEaSkills.choices.map((opts, i) => (
+                          <div key={`ea-sk-${i}`} style={{ marginBottom: 'var(--space-xs)' }}>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Choose skill:</div>
+                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                              {opts.map(opt => (
+                                <button key={opt}
+                                  className={`btn ${(eaSkillChoices[ea.name] || {})[i] === opt ? 'btn--primary' : ''}`}
+                                  style={{ fontSize: '0.7rem', padding: '2px 6px' }}
+                                  onClick={() => setEaSkillChoices({
+                                    ...eaSkillChoices,
+                                    [ea.name]: { ...(eaSkillChoices[ea.name] || {}), [i]: opt }
+                                  })}>
+                                  {opt}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                        {/* Auto talents */}
+                        {parsedEaTalents.auto.length > 0 && (
+                          <div style={{ marginBottom: 'var(--space-xs)' }}>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Talents (Auto):</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                              {parsedEaTalents.auto.map((t, idx) => (
+                                <span key={idx} className="badge" style={{ fontSize: '0.7rem' }}>{t}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {/* Talent choices */}
+                        {parsedEaTalents.choices.map((opts, i) => (
+                          <div key={`ea-tal-${i}`} style={{ marginBottom: 'var(--space-xs)' }}>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Choose talent:</div>
+                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                              {opts.map(opt => (
+                                <button key={opt}
+                                  className={`btn ${(eaTalentChoices[ea.name] || {})[i] === opt ? 'btn--primary' : ''}`}
+                                  style={{ fontSize: '0.7rem', padding: '2px 6px' }}
+                                  title={getTalentDescription(opt)}
+                                  onClick={() => setEaTalentChoices({
+                                    ...eaTalentChoices,
+                                    [ea.name]: { ...(eaTalentChoices[ea.name] || {}), [i]: opt }
+                                  })}>
+                                  {opt}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+      )}
+
+      {/* Step 5: Characteristics */}
+      {step === 5 && (
+        <div>
+          <h2 style={{ marginBottom: 'var(--space-md)' }}>Enter Characteristics</h2>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: 'var(--space-sm)' }}>
+            Enter your final characteristic values (after homeworld bonuses). G-1289 stats will be applied automatically.
+          </p>
+          {psykerWithoutMystic && !wpMeetsRequirement && (
+            <div style={{
+              fontSize: '0.8rem', padding: 'var(--space-sm)', marginBottom: 'var(--space-sm)',
+              borderRadius: 'var(--radius-md, 8px)', border: '1px solid var(--color-danger, #ef4444)',
+              background: 'rgba(239, 68, 68, 0.08)', color: 'var(--color-danger, #ef4444)'
+            }}>
+              ⚠ <strong>Psyker Requirement:</strong> Willpower must be at least 40 (currently {charStats['WP'] || 0})
+            </div>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 'var(--space-sm)', marginBottom: 'var(--space-lg)' }}>
+            {CHAR_ABBREVS.map(abbrev => (
+              <label key={abbrev} className="stat-edit-form__label" style={{ textAlign: 'center' }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>{abbrev}</span>
+                <input className="input" type="number" style={{ textAlign: 'center' }}
+                  value={charStats[abbrev] || ''} placeholder="00"
+                  onChange={e => setCharStats({ ...charStats, [abbrev]: parseInt(e.target.value) || 0 })} />
+              </label>
+            ))}
+          </div>
+
+          <h2 style={{ marginBottom: 'var(--space-sm)' }}>Fate & Wounds</h2>
+          <div style={{ display: 'flex', gap: 'var(--space-md)', marginBottom: 'var(--space-sm)' }}>
+            {/* Fate */}
+            <div style={{ flex: 1 }}>
+              <div className="stat-edit-form__label">Fate (Base: {selHomeworld?.fate}, Bonus on {selHomeworld?.blessing})</div>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button className="btn" onClick={() => {
+                  let threshold = parseInt((selHomeworld?.blessing || '').replace(/\D/g, '')) || 8;
+                  const roll = Math.floor(Math.random() * 10) + 1;
+                  const bonus = roll >= threshold ? 1 : 0;
+                  setRolledFate((parseInt(selHomeworld?.fate) || 0) + bonus);
+                  setFateManual('');
+                }}>Roll 1d10</button>
+                <input className="input" type="number" style={{ width: 60 }} placeholder="Manual" value={fateManual || (rolledFate ?? '')} onChange={e => { setFateManual(e.target.value); setRolledFate(null); }} />
+              </div>
+            </div>
+
+            {/* Wounds */}
+            <div style={{ flex: 1 }}>
+              <div className="stat-edit-form__label">Wounds ({selHomeworld?.wounds})</div>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button className="btn" onClick={() => {
+                  const wStr = selHomeworld?.wounds || '8+1d5';
+                  const match = wStr.match(/(\d+)\+1d(\d+)/i);
+                  if (match) {
+                    const base = parseInt(match[1]);
+                    const die = parseInt(match[2]);
+                    const roll = Math.floor(Math.random() * die) + 1;
+                    setRolledWounds(base + roll);
+                  } else {
+                    setRolledWounds(parseInt(wStr) || 8);
+                  }
+                  setWoundsManual('');
+                }}>Roll</button>
+                <input className="input" type="number" style={{ width: 60 }} placeholder="Manual" value={woundsManual || (rolledWounds ?? '')} onChange={e => { setWoundsManual(e.target.value); setRolledWounds(null); }} />
+              </div>
+            </div>
+
+            {/* Insanity (conditionally shown if homeworld grants it, like Black Ship) */}
+            {selHomeworld?.special?.toLowerCase().includes('insanity') && (
+              <div style={{ flex: 1 }}>
+                <div className="stat-edit-form__label">Insanity (1d10+5)</div>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button className="btn" onClick={() => {
+                    const roll = Math.floor(Math.random() * 10) + 1;
+                    setRolledInsanity(5 + roll);
+                    setInsanityManual('');
+                  }}>Roll 1d10</button>
+                  <input className="input" type="number" style={{ width: 60 }} placeholder="Manual" value={insanityManual || (rolledInsanity ?? '')} onChange={e => { setInsanityManual(e.target.value); setRolledInsanity(null); }} />
+                </div>
+              </div>
+            )}
+
+            {/* Rogue Psyker Corruption (conditionally shown) */}
+            {selectedEliteAdvances.includes('Psyker') && !selBackground?.name?.includes('Telepathica') && (
+              <div style={{ flex: 1 }}>
+                <div className="stat-edit-form__label" style={{ color: 'var(--color-danger, #ef4444)' }}>Corruption (3d5)</div>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button className="btn btn--danger" style={{ padding: '0.4rem 0.6rem' }} onClick={() => {
+                    const roll = (Math.floor(Math.random() * 5) + 1) + (Math.floor(Math.random() * 5) + 1) + (Math.floor(Math.random() * 5) + 1);
+                    setRolledRogueCorruption(roll);
+                    setRogueCorruptionManual('');
+                  }}>Roll 3d5</button>
+                  <input className="input" type="number" style={{ width: 60 }} placeholder="Manual" value={rogueCorruptionManual || (rolledRogueCorruption ?? '')} onChange={e => { setRogueCorruptionManual(e.target.value); setRolledRogueCorruption(null); }} />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Step 6: Divination */}
+      {step === 6 && (
+        <div>
+          <h2 style={{ marginBottom: 'var(--space-sm)' }}>Divination</h2>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: 'var(--space-md)' }}>
+            Roll 1d100 to receive your prophecy. You may choose to burn 1 Fate Point to select your divination instead.
+          </p>
+
+          {!divinationRolled ? (
+            <div style={{ display: 'flex', gap: 'var(--space-sm)', alignItems: 'center' }}>
+              <button className="btn btn--primary" onClick={() => {
+                const roll = Math.floor(Math.random() * 100) + 1;
+                const div = divinationsData.find(d => roll >= d.min && roll <= d.max);
+                if (div) setDivinationRolled(div);
+              }}>Roll 1d100</button>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <select className="input" onChange={e => {
+                  if (!e.target.value) return;
+                  const div = divinationsData.find(d => d.rangeString === e.target.value);
+                  if (div) {
+                    setDivinationRolled(div);
+                    setDivinationOverrideFate(-1); // Burn 1 fate point
+                  }
+                }} value="">
+                  <option value="">Burn 1 Fate Point to choose...</option>
+                  {divinationsData.map(d => (
+                    <option key={d.rangeString} value={d.rangeString}>{d.rangeString}: {d.prophecy}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          ) : (
+            <div style={{ padding: 'var(--space-md)', background: 'rgba(139, 92, 246, 0.08)', borderRadius: 'var(--radius-md)', border: '1px solid var(--theme-color)' }}>
+              <h3 style={{ marginBottom: 'var(--space-xs)', color: 'var(--theme-color)' }}>{divinationRolled.rangeString} - {divinationRolled.prophecy}</h3>
+              <p style={{ fontSize: '0.85rem', marginBottom: 'var(--space-md)' }}>{divinationRolled.effect}</p>
+              
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-md)' }}>
+                <div style={{ fontSize: '0.8rem', color: 'var(--color-warning, #f59e0b)', fontWeight: 600 }}>
+                  {divinationOverrideFate === -1 && '⚠ You burned 1 Fate Point to choose this divination.'}
+                </div>
+                <button className="btn" style={{ fontSize: '0.75rem' }} onClick={() => {
+                  setDivinationRolled(null);
+                  setDivinationOverrideFate(0);
+                  setDivinationOverrideStats({});
+                  setDivinationOverrideSkills('');
+                  setDivinationOverrideTalents('');
+                  setDivinationOverrideInsanity(0);
+                  setDivinationOverrideCorruption(0);
+                  setDivinationOverrideWounds(0);
+                }}>Reroll / Change</button>
+              </div>
+
+              <div style={{ marginTop: 'var(--space-md)', paddingTop: 'var(--space-md)', borderTop: '1px solid var(--border-color)' }}>
+                <h4 style={{ marginBottom: 'var(--space-sm)' }}>Apply Mechanical Effects</h4>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: 'var(--space-sm)' }}>
+                  Use the fields below to manually apply any stats, skills, talents, or points granted by this divination. 
+                  (The prophecy itself will automatically be added as a Trait).
+                </p>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-sm)', marginBottom: 'var(--space-sm)' }}>
+                  <div>
+                    <label className="stat-edit-form__label">Bonus Skills (comma-separated)</label>
+                    <input className="input" type="text" value={divinationOverrideSkills} onChange={e => setDivinationOverrideSkills(e.target.value)} placeholder="e.g. Awareness, Scrutiny" />
+                  </div>
+                  <div>
+                    <label className="stat-edit-form__label">Bonus Talents (comma-separated)</label>
+                    <input className="input" type="text" value={divinationOverrideTalents} onChange={e => setDivinationOverrideTalents(e.target.value)} placeholder="e.g. Quick Draw" />
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-sm)', marginBottom: 'var(--space-sm)' }}>
+                  <div>
+                    <label className="stat-edit-form__label">Wounds Mod</label>
+                    <input className="input" type="number" value={divinationOverrideWounds || ''} onChange={e => setDivinationOverrideWounds(parseInt(e.target.value) || 0)} placeholder="0" />
+                  </div>
+                  <div>
+                    <label className="stat-edit-form__label">Fate Mod</label>
+                    <input className="input" type="number" value={divinationOverrideFate || ''} onChange={e => setDivinationOverrideFate(parseInt(e.target.value) || 0)} placeholder="0" />
+                  </div>
+                  <div>
+                    <label className="stat-edit-form__label">Insanity Mod</label>
+                    <input className="input" type="number" value={divinationOverrideInsanity || ''} onChange={e => setDivinationOverrideInsanity(parseInt(e.target.value) || 0)} placeholder="0" />
+                  </div>
+                  <div>
+                    <label className="stat-edit-form__label">Corruption Mod</label>
+                    <input className="input" type="number" value={divinationOverrideCorruption || ''} onChange={e => setDivinationOverrideCorruption(parseInt(e.target.value) || 0)} placeholder="0" />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="stat-edit-form__label">Characteristic Modifiers (+/-)</label>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                    {CHAR_ABBREVS.map(a => (
+                      <div key={a} style={{ display: 'flex', alignItems: 'center', background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: 4 }}>
+                        <span style={{ fontSize: '0.75rem', width: 24, fontWeight: 600 }}>{a}</span>
+                        <input className="input" type="number" style={{ width: 45, padding: '2px 4px', fontSize: '0.75rem', textAlign: 'center' }} 
+                          value={divinationOverrideStats[a] || ''} 
+                          onChange={e => setDivinationOverrideStats({ ...divinationOverrideStats, [a]: parseInt(e.target.value) || 0 })} 
+                          placeholder="0" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Step 7: Review */}
+      {step === 7 && (
+        <div>
+          <h2 style={{ marginBottom: 'var(--space-md)' }}>Review</h2>
+          <div style={{ fontSize: '0.85rem' }}>
+            <div className="skill-row"><strong>Name:</strong> <span style={{ marginLeft: 8 }}>{charName}</span></div>
+            <div className="skill-row"><strong>Homeworld:</strong> <span style={{ marginLeft: 8 }}>
+              {selHomeworld?.variant === '-' ? selHomeworld?.name : `${selHomeworld?.name} — ${selHomeworld?.variant}`}
+            </span></div>
+            <div className="skill-row"><strong>Background:</strong> <span style={{ marginLeft: 8 }}>{selBackground?.name}</span></div>
+            <div className="skill-row"><strong>Role:</strong> <span style={{ marginLeft: 8 }}>{selRole?.name}</span></div>
+            {selectedEliteAdvances.length > 0 && (
+              <div className="skill-row"><strong>Elite Advances:</strong> <span style={{ marginLeft: 8 }}>
+                {selectedEliteAdvances.join(', ')}
+              </span></div>
+            )}
+            {hwAltActive && (
+              <div className="skill-row" style={{ color: 'var(--color-warning, #f59e0b)' }}>
+                <strong>⚡ Alternate Path:</strong> <span style={{ marginLeft: 8 }}>
+                  {hwAlt.advanceName} — Talents: {hwAlt.talents || 'None'}
+                  {hwAlt.psyRatingBonus > 0 && ` · PR +${hwAlt.psyRatingBonus}`}
+                </span>
+              </div>
+            )}
+            {selHomeworld?.variant === 'Black Ship' && !hwAltActive && (
+              <div className="skill-row"><strong>Bonus Trait:</strong> <span style={{ marginLeft: 8 }}>Not Quite Human (1)</span></div>
+            )}
+            <div className="skill-row"><strong>Fate:</strong> <span style={{ marginLeft: 8 }}>{selHomeworld?.fate}</span></div>
+            {(insanityManual || rolledInsanity) && (
+              <div className="skill-row"><strong>Insanity:</strong> <span style={{ marginLeft: 8 }}>{insanityManual || rolledInsanity}</span></div>
+            )}
+            {(rogueCorruptionManual || rolledRogueCorruption) && (
+              <div className="skill-row" style={{ color: 'var(--color-danger)' }}><strong>Corruption:</strong> <span style={{ marginLeft: 8 }}>{rogueCorruptionManual || rolledRogueCorruption}</span></div>
+            )}
+
+            <div style={{ marginTop: 'var(--space-sm)' }}>
+              <div className="stat-edit-form__label">Aptitudes</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {getAptitudes().map((a, i) => <span key={i} className="badge" style={{ fontSize: '0.75rem' }}>{a}</span>)}
+              </div>
+            </div>
+
+            <div style={{ marginTop: 'var(--space-sm)' }}>
+              <div className="stat-edit-form__label">Characteristics</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {CHAR_ABBREVS.map(a => (
+                  <span key={a} style={{ fontSize: '0.85rem' }}><strong>{a}</strong> {charStats[a] || 0}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Navigation */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 'var(--space-lg)' }}>
+        <button className="btn" onClick={step === 0 ? onCancel : () => setStep(step - 1)}>
+          {step === 0 ? 'Cancel' : '← Back'}
+        </button>
+        {step < 7 ? (
+          <button className="btn btn--primary" onClick={() => setStep(step + 1)}
+            disabled={
+              (step === 0 && (!charName.trim() || !gender || (gender === 'Male' && !genderChoice1) || (gender === 'Female' && (!genderChoice1 || !genderChoice2)))) ||
+              (step === 1 && !step1Valid) ||
+              (step === 2 && !step2Valid) ||
+              (step === 3 && !step3Valid) ||
+              (step === 4 && !step4Valid) ||
+              (step === 5 && !step5Valid) ||
+              (step === 6 && !divinationRolled) // Require divination
+            }>
+            Next →
+          </button>
+        ) : (
+          <button className="btn btn--primary" onClick={handleFinish}>
+            Create Character
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}

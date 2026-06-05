@@ -1,0 +1,30 @@
+{
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/*.log": true,
+    "**/data/*.db": true,
+    "**/data/*.db-wal": true,
+    "**/data/*.db-shm": true,
+    "**/.tempmediaStorage": true,
+    "**/.system_generated": true
+  },
+  "files.exclude": {
+    "**/.git": true,
+    "**/.svn": true,
+    "**/.hg": true,
+    "**/CVS": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true,
+    "**/data/*.db": true,
+    "**/data/*.db-wal": true,
+    "**/data/*.db-shm": true
+  },
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/node_modules/*/**": true,
+    "**/data/*.db*": true,
+    "**/.system_generated/**": true,
+    "**/.tempmediaStorage/**": true
+  }
+}
