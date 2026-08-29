@@ -1,6 +1,8 @@
 import express from 'express';
+import { authMiddleware } from '../middleware/auth.js';
 
 const router = express.Router();
+router.use(authMiddleware);
 
 const TOOLS_CSV_URL = 'https://docs.google.com/spreadsheets/d/1lyE5dr0l18JeUxGj_jrkZ0P4bhj2VgYJbB3Oy5-0CrA/export?format=csv&gid=1234474182';
 const CONSUMABLES_CSV_URL = 'https://docs.google.com/spreadsheets/d/1lyE5dr0l18JeUxGj_jrkZ0P4bhj2VgYJbB3Oy5-0CrA/export?format=csv&gid=2021707157';
@@ -27,7 +29,7 @@ export interface GearTemplate {
 
 let cachedTemplates: GearTemplate[] | null = null;
 let lastFetchTime = 0;
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
 /**
  * Proper CSV parser that handles quoted fields with commas and newlines.
@@ -77,7 +79,7 @@ async function fetchAndParseGear(): Promise<GearTemplate[]> {
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await res.text();
-      const lines = text.split('\n').map((l: string) => l.split(',').map((c: string) => c.trim().replace(/^"|"$/g, '')));
+      const lines = parseCsvRows(text);
       
       // Typical format: Name, Cost, Weight, Availability, Craftsmanship, Notes/Description
       for (let i = 1; i < lines.length; i++) {
@@ -148,8 +150,9 @@ async function fetchAndParseGear(): Promise<GearTemplate[]> {
 // GET /api/gear/templates
 router.get('/templates', async (req, res) => {
   try {
+    const forceRefresh = req.query.refresh === 'true';
     const now = Date.now();
-    if (!cachedTemplates || now - lastFetchTime > CACHE_TTL) {
+    if (forceRefresh || !cachedTemplates || now - lastFetchTime > CACHE_TTL) {
       cachedTemplates = await fetchAndParseGear();
       lastFetchTime = now;
       console.log(`[Gear] Fetched ${cachedTemplates.length} templates from Google Sheets`);

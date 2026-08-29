@@ -1,7 +1,7 @@
 #!/bin/bash
 
 COMPARTMENT_ID="ocid1.tenancy.oc1..aaaaaaaankijb676o3tmart7rkm3va3ak6i4gjxaghtux6laqexmstfhfjqa"
-AVAILABILITY_DOMAIN="wqoi:US-CHICAGO-1-AD-1"
+AVAILABILITY_DOMAIN="wqoi:US-CHICAGO-1-AD-3"
 IMAGE_ID="ocid1.image.oc1.us-chicago-1.aaaaaaaaol7tabwitv6c7zizomgfsao3cvyf4fl6jcjbv2hpx27h5uuo2cla"
 SUBNET_ID="ocid1.subnet.oc1.us-chicago-1.aaaaaaaatvvjbaccrpst3aghh67rci5yv6imkud6ffs6ih2xjbcr5qvtvzwa"
 SHAPE="VM.Standard.A1.Flex"

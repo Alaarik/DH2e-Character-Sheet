@@ -61,6 +61,8 @@ export default function ChargenWizard({ onComplete, onCancel }: Props) {
   const [chosenBlockIndex, setChosenBlockIndex] = useState<number | null>(null);
   const [swapAssignments, setSwapAssignments] = useState<Record<string, number>>({});
   const [swapSource, setSwapSource] = useState<string | null>(null);
+  const [rannicksMercyUsed, setRannicksMercyUsed] = useState(false);
+  const [rannicksMercyMessage, setRannicksMercyMessage] = useState<string | null>(null);
   const [keptRolledStats, setKeptRolledStats] = useState(false);
   const [loading, setLoading] = useState(true);
   const [homeworlds, setHomeworlds] = useState<any[]>([]);
@@ -190,6 +192,15 @@ export default function ChargenWizard({ onComplete, onCancel }: Props) {
   useEffect(() => {
     setStatBlocks([]);
     setChosenBlockIndex(null);
+    setRannicksMercyUsed(false);
+    setRannicksMercyMessage(null);
+    setCharStats({});
+    setRolledFate(null);
+    setFateManual('');
+    setRolledWounds(null);
+    setWoundsManual('');
+    setRolledInsanity(null);
+    setInsanityManual('');
   }, [selHomeworld]);
 
   // Reset hwAltChosen and talent/skill choices when homeworld changes
@@ -1012,6 +1023,8 @@ export default function ChargenWizard({ onComplete, onCancel }: Props) {
 
     setStatBlocks([generateBlock(), generateBlock()]);
     setChosenBlockIndex(null);
+    setRannicksMercyUsed(false);
+    setRannicksMercyMessage(null);
     setRollStep('choose');
     setShowRollModal(true);
   };
@@ -2135,7 +2148,7 @@ export default function ChargenWizard({ onComplete, onCancel }: Props) {
           </p>
           
           <button className="btn btn--secondary" style={{ marginBottom: "var(--space-md)", width: "100%" }} onClick={rollCharacteristics}>
-            🎲 Roll Characteristics
+            {statBlocks.length > 0 ? "🎲 View / Edit Rolls" : "🎲 Roll Characteristics"}
           </button>
 
           {psykerWithoutMystic && !wpMeetsRequirement && (
@@ -2433,11 +2446,34 @@ export default function ChargenWizard({ onComplete, onCancel }: Props) {
             </div>
 
             <div style={{ marginTop: 'var(--space-sm)' }}>
-              <div className="stat-edit-form__label">Characteristics</div>
+              <div className="stat-edit-form__label">Characteristics (including G-1289 modifiers)</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {CHAR_ABBREVS.map(a => (
-                  <span key={a} style={{ fontSize: '0.85rem' }}><strong>{a}</strong> {charStats[a] || 0}</span>
-                ))}
+                {CHAR_ABBREVS.map(a => {
+                  let g1289Mod = 0;
+                  if (a === 'WS' || a === 'BS' || a === 'PER') g1289Mod = 3;
+                  if (a === 'FEL') g1289Mod = -3;
+                  
+                  return (
+                    <span key={a} style={{ fontSize: '0.85rem' }}>
+                      <strong>{a}</strong> {(charStats[a] || 0) + g1289Mod}
+                      {g1289Mod !== 0 && (
+                        <span style={{ opacity: 0.6, fontSize: '0.75rem', marginLeft: 4 }}>
+                          ({g1289Mod > 0 ? '+' : ''}{g1289Mod})
+                        </span>
+                      )}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ marginTop: 'var(--space-md)', padding: 'var(--space-md)', background: 'rgba(34, 197, 94, 0.08)', border: '1px solid rgba(34, 197, 94, 0.3)', borderRadius: 'var(--radius-md)' }}>
+              <div className="stat-edit-form__label" style={{ color: 'var(--color-success, #22c55e)' }}>G-1289 Indoctrination Training (Automatically Applied)</div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                <div><strong style={{ color: 'var(--text-color)' }}>Characteristics:</strong> +3 WS, +3 BS, +3 PER, -3 FEL</div>
+                <div><strong style={{ color: 'var(--text-color)' }}>Skills:</strong> Navigate (Surface), Common Lore (War), Awareness, Stealth, Survival</div>
+                <div><strong style={{ color: 'var(--text-color)' }}>Talents:</strong> Foresight, Weapon Training (Solid Projectile), Weapon Training (Low-Tech), Takedown, Enemy (Inquisition)</div>
+                <div><strong style={{ color: 'var(--text-color)' }}>Gear:</strong> G-1289 Shock Collar, G-1289 Field Uniform{!selectedEliteAdvances.includes('Ogryn') ? ", G-1289 Munitorum Manual, G-1289 Operative's Uplifting Primer" : ""}</div>
               </div>
             </div>
           </div>
@@ -2506,17 +2542,88 @@ export default function ChargenWizard({ onComplete, onCancel }: Props) {
                   ))}
                 </div>
                 
-                {chosenBlockIndex !== null && (
-                  <div style={{ marginTop: 'var(--space-lg)', padding: 'var(--space-md)', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-md)' }}>
-                    <p style={{ marginBottom: 'var(--space-md)', fontSize: '0.9rem', textAlign: 'center' }}>
-                      Do you wish to keep these Characteristics as rolled (+400 XP), or re-assign them freely (0 XP)?
-                    </p>
-                    <div style={{ display: 'flex', justifyContent: 'center', gap: 'var(--space-md)' }}>
-                      <button className="btn btn--primary" onClick={handleKeepRolls}>Keep As Rolled (+400 XP)</button>
-                      <button className="btn btn--secondary" onClick={handleStartSwap}>Re-Assign (0 XP)</button>
-                    </div>
-                  </div>
-                )}
+                {chosenBlockIndex !== null && (() => {
+                  const chosenBlock = statBlocks[chosenBlockIndex];
+                  // INF is not a rolled characteristic (it's derived), so exclude it
+                  const eligibleStats = CHAR_ABBREVS.filter(a => a !== 'INF');
+                  return (
+                    <>
+                      {!rannicksMercyUsed && (
+                        <div style={{
+                          marginTop: 'var(--space-md)', padding: 'var(--space-md)',
+                          background: 'rgba(180, 140, 20, 0.08)', border: '1px solid rgba(180, 140, 20, 0.4)',
+                          borderRadius: 'var(--radius-md)'
+                        }}>
+                          <p style={{ fontSize: '0.85rem', marginBottom: 'var(--space-sm)', textAlign: 'center', color: 'rgba(220, 180, 50, 0.9)' }}>
+                            <strong>⚜ Rannick's Mercy ⚜</strong>
+                          </p>
+                          <p style={{ fontSize: '0.8rem', marginBottom: 'var(--space-sm)', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                            You may re-roll ONE characteristic and keep the better result. Select a characteristic to re-roll:
+                          </p>
+                          <div style={{ display: 'flex', justifyContent: 'center', gap: 'var(--space-sm)', flexWrap: 'wrap' }}>
+                            {eligibleStats.map(a => (
+                              <button key={a} className="btn" style={{
+                                borderColor: 'rgba(180, 140, 20, 0.5)',
+                                color: 'rgba(220, 180, 50, 0.9)',
+                              }} onClick={() => {
+                                const plusStats = [selHomeworld?.charPlus1, selHomeworld?.charPlus2].filter(Boolean);
+                                const minusStats = [selHomeworld?.charMinus].filter(Boolean);
+                                const getAbbrev = (fullName: string | undefined) => {
+                                  const match = Object.entries(CHAR_FULL).find(([_, v]) => v === fullName);
+                                  return match ? match[0] : null;
+                                };
+                                const plusAbbrevs = plusStats.map(getAbbrev).filter(Boolean) as string[];
+                                const minusAbbrevs = minusStats.map(getAbbrev).filter(Boolean) as string[];
+                                
+                                let count = 2, keep = 2, keepHigh = true;
+                                if (plusAbbrevs.includes(a)) { count = 3; keepHigh = true; }
+                                else if (minusAbbrevs.includes(a)) { count = 3; keepHigh = false; }
+                                
+                                const rolls = Array.from({ length: count }, () => Math.floor(Math.random() * 10) + 1);
+                                rolls.sort((x, y) => x - y);
+                                let kept = [];
+                                if (keepHigh) kept = rolls.slice(-keep);
+                                else kept = rolls.slice(0, keep);
+                                const newRoll = kept.reduce((sum, val) => sum + val, 0);
+                                
+                                const oldRoll = chosenBlock[a];
+                                const finalRoll = Math.max(oldRoll, newRoll);
+                                
+                                const updatedBlocks = [...statBlocks];
+                                updatedBlocks[chosenBlockIndex] = { ...updatedBlocks[chosenBlockIndex], [a]: finalRoll };
+                                setStatBlocks(updatedBlocks);
+                                setRannicksMercyUsed(true);
+                                setRannicksMercyMessage(`⚜ Rannick's Mercy on ${a}: Re-rolled ${newRoll}. ${newRoll > oldRoll ? 'The Emperor provides!' : 'Original roll kept.'}`);
+                              }}>
+                                {a} ({chosenBlock[a]})
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {rannicksMercyUsed && (
+                        <div style={{
+                          marginTop: 'var(--space-md)', padding: 'var(--space-sm) var(--space-md)',
+                          background: 'rgba(180, 140, 20, 0.06)', border: '1px solid rgba(180, 140, 20, 0.2)',
+                          borderRadius: 'var(--radius-md)', textAlign: 'center',
+                          fontSize: '0.8rem', color: 'rgba(220, 180, 50, 0.7)'
+                        }}>
+                          {rannicksMercyMessage || "⚜ Rannick's Mercy has been invoked."}
+                        </div>
+                      )}
+
+                      <div style={{ marginTop: 'var(--space-lg)', padding: 'var(--space-md)', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-md)' }}>
+                        <p style={{ marginBottom: 'var(--space-md)', fontSize: '0.9rem', textAlign: 'center' }}>
+                          Do you wish to keep these Characteristics as rolled (+400 XP), or re-assign them freely (0 XP)?
+                        </p>
+                        <div style={{ display: 'flex', justifyContent: 'center', gap: 'var(--space-md)' }}>
+                          <button className="btn btn--primary" onClick={handleKeepRolls}>Keep As Rolled (+400 XP)</button>
+                          <button className="btn btn--secondary" onClick={handleStartSwap}>Re-Assign (0 XP)</button>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             )}
 

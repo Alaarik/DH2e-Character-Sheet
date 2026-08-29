@@ -25,18 +25,40 @@ const GID_DIVINATIONS = '1774827029';
 const GID_KIT = '18295788';
 
 function parseCsv(text: string): string[][] {
-  return text.split('\n').map(line => {
-    const row: string[] = [];
-    let cell = '', inQ = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (c === '"') { if (inQ && line[i+1] === '"') { cell += '"'; i++; } else inQ = !inQ; }
-      else if (c === ',' && !inQ) { row.push(cell.trim()); cell = ''; }
-      else if (c !== '\r') cell += c;
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
+  let cell = '';
+  let inQ = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      if (inQ && text[i + 1] === '"') { cell += '"'; i++; }
+      else inQ = !inQ;
+    } else if (c === ',' && !inQ) {
+      currentRow.push(cell.trim());
+      cell = '';
+    } else if ((c === '\n' || c === '\r') && !inQ) {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      currentRow.push(cell.trim());
+      if (currentRow.length > 1 || currentRow[0] !== '') {
+        rows.push(currentRow);
+      }
+      currentRow = [];
+      cell = '';
+    } else {
+      cell += c;
     }
-    row.push(cell.trim());
-    return row;
-  });
+  }
+
+  if (cell || currentRow.length > 0) {
+    currentRow.push(cell.trim());
+    if (currentRow.length > 1 || currentRow[0] !== '') {
+      rows.push(currentRow);
+    }
+  }
+
+  return rows;
 }
 
 function splitRespectingParens(str: string): string[] {
